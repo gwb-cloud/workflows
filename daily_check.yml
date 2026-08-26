@@ -1,0 +1,21 @@
+name: 每日验收巡检
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # UTC 2点 = 北京时间上午10点，可自行调整
+  workflow_dispatch:        # 允许在 Actions 页面手动点按钮立刻跑一次，方便测试
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python check_and_notify.py
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          BEEHIVE_WEBHOOK: ${{ secrets.BEEHIVE_WEBHOOK }}
