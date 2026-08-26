@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-每日验收巡检脚本
+每日验收巡检脚本（多群路由版）
 功能：读取飞书多维表格"节点更新总表"，检查各节点是否按规定时间窗口完成，
-      未完成的通过蜂巢 webhook 发消息提醒。
+      未完成的通过蜂巢 webhook 发消息提醒到对应的群。
 
 需要在 GitHub Actions 的 Secrets 里配置：
 - FEISHU_APP_ID
 - FEISHU_APP_SECRET
-- BEEHIVE_WEBHOOK
+- BEEHIVE_WEBHOOK_YANSHOU   （验收群 webhook）
+- BEEHIVE_WEBHOOK_PRODUCT   （产品群 webhook，如暂不需要可以先不配，脚本会自动跳过）
 
 需要在下方"配置区"填入你自己的表格信息。
 """
@@ -20,14 +21,20 @@ from datetime import datetime, timedelta
 
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET"]
-BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK"]
+
+# 多群路由表：key 是群的业务名称，value 是对应的 webhook 地址
+# 以后新增群，只需要在这里加一行，加一个对应的 GitHub Secret，不用改下面的业务逻辑
+WEBHOOK_MAP = {
+    "验收群": os.environ.get("BEEHIVE_WEBHOOK_YANSHOU"),
+    "产品群": os.environ.get("BEEHIVE_WEBHOOK_PRODUCT"),
+}
 
 # 多维表格的 app_token 和 table_id，从表格 URL 里取：
 # https://xxx.feishu.cn/base/{app_token}?table={table_id}
 TABLE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
 TABLE_ID = "tblSDaRAkltfVtx6"
 
-# 字段名，必须和表格里的字段名完全一致（截图里看到的名字）
+# 字段名，必须和表格里的字段名完全一致
 FIELD_VERSION = "版本号"
 FIELD_RELEASE_DATE = "版本发布日期"
 FIELD_P0_CHECKED = "验收无P0问题"
@@ -40,6 +47,11 @@ FIELD_I18N_CHECK = "多语言走查"
 
 # "验收无P0问题"如果是单选字段，这里填完成时对应的选项文字
 P0_DONE_VALUE = "是"
+
+# 巡检提醒默认发到哪个群（以后红黑榜等其他消息可以指定发"产品群"）
+DEFAULT_TARGET = "验收群"
+
+FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
 
 # ========== 以下不用改 ==========
 
@@ -80,14 +92,18 @@ def get_records(token):
     return records
 
 
-def send_to_beehive(text):
-    """发送文本消息到蜂巢群"""
+def send_to_beehive(text, target=DEFAULT_TARGET):
+    """发送文本消息到指定的蜂巢群"""
+    webhook_url = WEBHOOK_MAP.get(target)
+    if not webhook_url:
+        print(f"⚠️ 未配置「{target}」对应的 webhook 地址，跳过发送。消息内容：{text}")
+        return
     resp = requests.post(
-        BEEHIVE_WEBHOOK,
+        webhook_url,
         json={"msg_type": "text", "content": {"text": text}},
         timeout=10,
     )
-    print(f"发送结果: {resp.status_code} {resp.text}")
+    print(f"发送到「{target}」结果: {resp.status_code} {resp.text}")
 
 
 def parse_date(ms_timestamp):
@@ -110,14 +126,10 @@ def is_p0_confirmed(fields):
     if isinstance(value, str):
         return value == P0_DONE_VALUE
     if isinstance(value, list) and value:
-        # 单选字段有时返回 [{"text": "是"}] 这种结构
         first = value[0]
         if isinstance(first, dict):
             return first.get("text") == P0_DONE_VALUE
     return False
-
-
-FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
 
 
 def main():
@@ -126,7 +138,7 @@ def main():
     now = datetime.now()
 
     if FORCE_SEND:
-        # 调试模式：跳过日期判断，直接读一条真实记录验证"读表+发消息"全链路是否打通
+        # 调试模式：跳过日期判断，验证"读表+发消息"全链路是否打通
         if records:
             fields = records[0].get("fields", {})
             version = fields.get(FIELD_VERSION, "未知版本")
@@ -142,17 +154,14 @@ def main():
         release_date = parse_date(fields.get(FIELD_RELEASE_DATE))
 
         if not release_date:
-            continue  # 没填发布日期的记录跳过
+            continue
 
-        # 已经发布超过7天的旧版本不再重复催办，避免历史记录一直刷屏
         if now - release_date > timedelta(days=7):
             continue
 
         days_since_release = (now - release_date).days
-
         problems = []
 
-        # T+0 当天要完成的项：发版当天检查
         if days_since_release >= 0:
             if not is_p0_confirmed(fields):
                 problems.append("验收无P0问题 未确认")
@@ -163,7 +172,6 @@ def main():
             if not is_checked(fields, FIELD_FORBUD_BACKEND):
                 problems.append("ForBud-后台 更新记录 未更新")
 
-        # T+1（24H后）要完成的项
         if days_since_release >= 1:
             if not is_checked(fields, FIELD_BLIND_TEST):
                 problems.append("盲测用例 未在24H内录入")
@@ -172,7 +180,7 @@ def main():
 
         if problems:
             text = f"⚠️ 版本 {version} 验收巡检提醒：\n" + "\n".join(f"- {p}" for p in problems)
-            send_to_beehive(text)
+            send_to_beehive(text, target="验收群")
             print(text)
         else:
             print(f"版本 {version} 巡检通过，无异常")
