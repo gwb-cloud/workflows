@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '0 2 * * *'   # UTC 2点 = 北京时间上午10点，可自行调整
   workflow_dispatch:        # 允许在 Actions 页面手动点按钮立刻跑一次，方便测试
+    inputs:
+      force_send:
+        description: '强制发送测试消息（跳过日期判断逻辑）'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   check:
@@ -19,3 +25,4 @@ jobs:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           BEEHIVE_WEBHOOK: ${{ secrets.BEEHIVE_WEBHOOK }}
+          FORCE_SEND: ${{ github.event.inputs.force_send }}

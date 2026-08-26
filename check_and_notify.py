@@ -24,8 +24,8 @@ BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK"]
 
 # 多维表格的 app_token 和 table_id，从表格 URL 里取：
 # https://xxx.feishu.cn/base/{app_token}?table={table_id}
-TABLE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
-TABLE_ID = "tblSDaRAkltfVtx6"
+TABLE_APP_TOKEN = "填入你的总表 app_token"
+TABLE_ID = "填入你的总表 table_id"
 
 # 字段名，必须和表格里的字段名完全一致（截图里看到的名字）
 FIELD_VERSION = "版本号"
@@ -117,10 +117,24 @@ def is_p0_confirmed(fields):
     return False
 
 
+FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
+
+
 def main():
     token = get_tenant_token()
     records = get_records(token)
     now = datetime.now()
+
+    if FORCE_SEND:
+        # 调试模式：跳过日期判断，直接读一条真实记录验证"读表+发消息"全链路是否打通
+        if records:
+            fields = records[0].get("fields", {})
+            version = fields.get(FIELD_VERSION, "未知版本")
+            send_to_beehive(f"🔧 强制测试模式：成功读取到版本 {version} 的记录，webhook 发送正常")
+        else:
+            send_to_beehive("🔧 强制测试模式：表格已连通，但没有读到任何记录")
+        print("FORCE_SEND 模式已执行，跳过正常巡检逻辑")
+        return
 
     for record in records:
         fields = record.get("fields", {})
