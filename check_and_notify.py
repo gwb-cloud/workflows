@@ -24,8 +24,8 @@ BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK"]
 
 # 多维表格的 app_token 和 table_id，从表格 URL 里取：
 # https://xxx.feishu.cn/base/{app_token}?table={table_id}
-TABLE_APP_TOKEN = "填入你的总表 app_token"
-TABLE_ID = "填入你的总表 table_id"
+TABLE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
+TABLE_ID = "tblSDaRAkltfVtx6"
 
 # 字段名，必须和表格里的字段名完全一致（截图里看到的名字）
 FIELD_VERSION = "版本号"
