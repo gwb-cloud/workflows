@@ -1,0 +1,17 @@
+name: 测试Webhook
+
+on:
+  workflow_dispatch:   # 只能手动触发，不设定时，专门用来随时调试
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python test_webhook.py
+        env:
+          BEEHIVE_WEBHOOK: ${{ secrets.BEEHIVE_WEBHOOK }}
