@@ -142,7 +142,8 @@ def main():
         if records:
             fields = records[0].get("fields", {})
             version = fields.get(FIELD_VERSION, "未知版本")
-            send_to_beehive(f"🔧 强制测试模式：成功读取到版本 {version} 的记录，webhook 发送正常")
+            send_to_beehive(f"🔧 强制测试模式：成功读取到版本 {version} 的记录（验收群）", target="验收群")
+            send_to_beehive(f"🔧 强制测试模式：产品群 webhook 连通性测试，成功读取到版本 {version} 的记录（产品群）", target="产品群")
         else:
             send_to_beehive("🔧 强制测试模式：表格已连通，但没有读到任何记录")
         print("FORCE_SEND 模式已执行，跳过正常巡检逻辑")
