@@ -26,12 +26,12 @@ FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET"]
 # 以后新增群，只需要在这里加一行，加一个对应的 GitHub Secret，不用改下面的业务逻辑
 WEBHOOK_MAP = {
     "验收群": os.environ.get("BEEHIVE_WEBHOOK_YANSHOU"),
-    "产品群": os.environ.get("BEEHIVE_WEBHOOK_PRODUCT"),
+    "产品群": os.environ.get("BEEHIVE_WEBHOOK_P1_NODE"),
 }
 
 # 多维表格的 app_token 和 table_id，从表格 URL 里取：
 # https://xxx.feishu.cn/base/{app_token}?table={table_id}
-TABLE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
+TABLE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned" 
 TABLE_ID = "tblSDaRAkltfVtx6"
 
 # 字段名，必须和表格里的字段名完全一致
@@ -142,8 +142,7 @@ def main():
         if records:
             fields = records[0].get("fields", {})
             version = fields.get(FIELD_VERSION, "未知版本")
-            send_to_beehive(f"🔧 强制测试模式：成功读取到版本 {version} 的记录（验收群）", target="验收群")
-            send_to_beehive(f"🔧 强制测试模式：产品群 webhook 连通性测试，成功读取到版本 {version} 的记录（产品群）", target="产品群")
+            send_to_beehive(f"🔧 强制测试模式：成功读取到版本 {version} 的记录，webhook 发送正常")
         else:
             send_to_beehive("🔧 强制测试模式：表格已连通，但没有读到任何记录")
         print("FORCE_SEND 模式已执行，跳过正常巡检逻辑")
