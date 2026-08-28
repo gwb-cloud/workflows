@@ -18,4 +18,4 @@ jobs:
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-          BEEHIVE_WEBHOOK_PRODUCT: ${{ secrets.BEEHIVE_WEBHOOK_PRODUCT }}
+          BEEHIVE_WEBHOOK_P3_REDBLACK: ${{ secrets.BEEHIVE_WEBHOOK_P3_REDBLACK }}
