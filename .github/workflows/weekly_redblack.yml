@@ -1,0 +1,21 @@
+name: 每周红黑榜汇总
+
+on:
+  schedule:
+    - cron: '0 1 * * 1'   # UTC 周一1点 = 北京时间周一9点，可自行调整
+  workflow_dispatch:        # 允许手动立刻跑一次，方便测试
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python weekly_redblack.py
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          BEEHIVE_WEBHOOK_PRODUCT: ${{ secrets.BEEHIVE_WEBHOOK_PRODUCT }}
