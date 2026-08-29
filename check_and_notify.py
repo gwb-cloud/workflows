@@ -49,7 +49,10 @@ FIELD_I18N_CHECK = "多语言走查"
 P0_DONE_VALUE = "是"
 
 # 巡检提醒默认发到哪个群（以后红黑榜等其他消息可以指定发"产品群"）
-DEFAULT_TARGET = "验收群"
+DEFAULT_TARGET = "产品群"
+
+# 某项问题超期这么多天还没处理，额外抄送产品群做提前预警
+ESCALATION_DAYS = 2
 
 FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
 
@@ -160,28 +163,44 @@ def main():
             continue
 
         days_since_release = (now - release_date).days
+        # problems 里每一项是 (问题描述, 距对应deadline已超期天数)
         problems = []
 
         if days_since_release >= 0:
+            # T+0 当天要完成的项，deadline是第0天，超期天数=days_since_release
+            overdue = days_since_release
             if not is_p0_confirmed(fields):
-                problems.append("验收无P0问题 未确认")
+                problems.append(("验收无P0问题 未确认", overdue))
             if not is_checked(fields, FIELD_FORBUD_MAC):
-                problems.append("ForBud-Mac 更新记录 未更新")
+                problems.append(("ForBud-Mac 更新记录 未更新", overdue))
             if not is_checked(fields, FIELD_FORBUD_IPHONE):
-                problems.append("ForBud-iPhone 更新记录 未更新")
+                problems.append(("ForBud-iPhone 更新记录 未更新", overdue))
             if not is_checked(fields, FIELD_FORBUD_BACKEND):
-                problems.append("ForBud-后台 更新记录 未更新")
+                problems.append(("ForBud-后台 更新记录 未更新", overdue))
 
         if days_since_release >= 1:
+            # T+1（24H后）要完成的项，deadline是第1天，超期天数=days_since_release-1
+            overdue = days_since_release - 1
             if not is_checked(fields, FIELD_BLIND_TEST):
-                problems.append("盲测用例 未在24H内录入")
+                problems.append(("盲测用例 未在24H内录入", overdue))
             if not is_checked(fields, FIELD_HELP_DOC):
-                problems.append("帮助文档 未在24H内更新")
+                problems.append(("帮助文档 未在24H内更新", overdue))
 
         if problems:
-            text = f"⚠️ 版本 {version} 验收巡检提醒：\n" + "\n".join(f"- {p}" for p in problems)
+            text = f"⚠️ 版本 {version} 验收巡检提醒：\n" + "\n".join(f"- {p}" for p, _ in problems)
             send_to_beehive(text, target="验收群")
+            send_to_beehive(text, target="产品群")
             print(text)
+
+            # 超期天数达到升级阈值的，产品群额外再收一条更严肃的预警
+            escalated = [p for p, overdue in problems if overdue >= ESCALATION_DAYS]
+            if escalated:
+                esc_text = (
+                    f"🚨 版本 {version} 以下事项已超期 {ESCALATION_DAYS} 天以上，大概率将计入本月黑榜：\n"
+                    + "\n".join(f"- {p}" for p in escalated)
+                )
+                send_to_beehive(esc_text, target="产品群")
+                print(esc_text)
         else:
             print(f"版本 {version} 巡检通过，无异常")
 
