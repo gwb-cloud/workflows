@@ -85,10 +85,17 @@ def send_to_beehive(text):
     print(f"发送结果: {resp.status_code} {resp.text}")
 
 
+from datetime import timezone, timedelta
+
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
 def parse_date(ms_timestamp):
+    """飞书日期字段返回的是毫秒级时间戳，统一按北京时间解析，避免GitHub Actions跑在UTC
+    导致"发生时间"被解析成前一天，进而影响"本月"筛选的准确性。"""
     if not ms_timestamp:
         return None
-    return datetime.fromtimestamp(ms_timestamp / 1000)
+    return datetime.fromtimestamp(ms_timestamp / 1000, tz=BEIJING_TZ)
 
 
 def get_select_value(fields, field_name):
@@ -121,7 +128,7 @@ def get_person_name(fields, field_name):
 def main():
     token = get_tenant_token()
     records = get_records(token)
-    now = datetime.now()
+    now = datetime.now(BEIJING_TZ)
     current_month = now.month
     current_year = now.year
 

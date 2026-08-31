@@ -58,7 +58,7 @@ ESCALATION_DAYS = 2
 # 一项可以配多个人（比如P0需要多人确认），发消息时会一起@。
 # key 必须和下面 problems.append() 里的文案完全一致，改文案时这里也要同步改。
 ITEM_OWNERS = {
-    "验收无P0问题 未确认": ["Webb","大力","苏宸"],
+    "验收无P0问题 未确认": ["苏宸"],
     "ForBud-Mac 更新记录 未更新": ["Webb"],
     "ForBud-iPhone 更新记录 未更新": ["Webb"],
     "ForBud-后台 更新记录 未更新": ["Webb"],
@@ -73,6 +73,13 @@ PERSON_BEEHIVE_ID = {
     "雨纯": "ouv4qovzoc6cad",
     "苏宸": "ouvkmtuntg5xpk",
     "大力": "ouv4qovzlarm8d",
+    "秦汉": "ouviua2rcuub5e",
+    "李静": "ouvcofw0bgs9hf",
+    "Rhys": "ouv4qovznsatvc",
+    "Crisley": "ouv4qow0vt3ksn", 
+    "Yvonne": "ouv4qovzmwpkuy",
+    "唐炜": "ouv4qovznbncqw",
+    "严光": "ouvgwgfyt1elue",
 }
 
 FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
@@ -160,11 +167,18 @@ def build_problem_lines(problems):
     return lines, at_names_in_order
 
 
+from datetime import timezone, timedelta
+
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
 def parse_date(ms_timestamp):
-    """飞书日期字段返回的是毫秒级时间戳"""
+    """飞书日期字段返回的是毫秒级时间戳，统一按北京时间解析。
+    不能用系统本地时区解读——GitHub Actions 跑在 UTC，直接用 fromtimestamp()
+    会把"北京时间当天0点"解析成前一天，导致发布日期判断偏移，进而影响T+0/T+1天数计算。"""
     if not ms_timestamp:
         return None
-    return datetime.fromtimestamp(ms_timestamp / 1000)
+    return datetime.fromtimestamp(ms_timestamp / 1000, tz=BEIJING_TZ)
 
 
 def is_checked(fields, field_name):
@@ -189,7 +203,7 @@ def is_p0_confirmed(fields):
 def main():
     token = get_tenant_token()
     records = get_records(token)
-    now = datetime.now()
+    now = datetime.now(BEIJING_TZ)
 
     if FORCE_SEND:
         # 调试模式：跳过日期判断，验证"读表+发消息"全链路是否打通

@@ -134,10 +134,18 @@ def send_to_beehive(text, at_names=None):
     print(f"发送结果: {resp.status_code} {resp.text}")
 
 
+from datetime import timezone, timedelta
+
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
 def parse_date(ms_timestamp):
+    """飞书日期字段返回的是毫秒级时间戳，统一按北京时间解析。
+    不能用系统本地时区解读——GitHub Actions 跑在 UTC，直接用 fromtimestamp()
+    会把"北京时间当天0点"解析成前一天，导致日期匹配全部错位。"""
     if not ms_timestamp:
         return None
-    return datetime.fromtimestamp(ms_timestamp / 1000)
+    return datetime.fromtimestamp(ms_timestamp / 1000, tz=BEIJING_TZ)
 
 
 def get_person_name(fields, field_name):
@@ -221,7 +229,7 @@ def main():
     if TARGET_DATE_STR:
         target_date = datetime.strptime(TARGET_DATE_STR, "%Y-%m-%d").date()
     else:
-        target_date = datetime.now().date()
+        target_date = datetime.now(BEIJING_TZ).date()
 
     matched = []
     for record in records:
