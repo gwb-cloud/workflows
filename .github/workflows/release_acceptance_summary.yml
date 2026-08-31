@@ -1,0 +1,28 @@
+name: 发布验收总览
+
+on:
+  schedule:
+    - cron: '0 2 * * *'    # UTC 2点 = 北京时间上午10点
+    - cron: '0 10 * * *'   # UTC 10点 = 北京时间下午18点
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: '指定要检查的发布日期，格式 2026-08-21，留空则默认今天'
+        required: false
+        default: ''
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python release_acceptance_summary.py
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          BEEHIVE_WEBHOOK_P2_WORKFLOW: ${{ secrets.BEEHIVE_WEBHOOK_P2_WORKFLOW }}
+          TARGET_RELEASE_DATE: ${{ github.event.inputs.target_date }}
