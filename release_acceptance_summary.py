@@ -64,6 +64,9 @@ RESULT_SKIP = "无需验收"
 # 目标发布日期：默认取今天。手动触发测试时可以通过 workflow 输入指定日期，格式 2026-08-21
 TARGET_DATE_STR = os.environ.get("TARGET_RELEASE_DATE", "")
 
+# 调试模式：打印每条记录"上线日期"字段的原始值和解析结果，排查匹配不上的问题时打开
+DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
+
 # 产品owner姓名 → 蜂巢账号ID，需要你实际维护补全
 PERSON_BEEHIVE_ID = {
     "Webb": "ouv4qovzpupe9m",
@@ -231,10 +234,20 @@ def main():
     else:
         target_date = datetime.now(BEIJING_TZ).date()
 
+    print(f"目标日期: {target_date}")
+    print(f"共读取到 {len(records)} 条记录")
+
     matched = []
     for record in records:
         fields = record.get("fields", {})
-        online_date = parse_date(fields.get(FIELD_ONLINE_DATE))
+        raw_online_date = fields.get(FIELD_ONLINE_DATE)
+        online_date = parse_date(raw_online_date)
+
+        if DEBUG:
+            desc = fields.get(FIELD_PROJECT_DESC, "未命名需求")
+            parsed_str = online_date.strftime("%Y-%m-%d %H:%M:%S %Z") if online_date else "解析失败/为空"
+            print(f"[DEBUG] {desc} | 上线日期原始值: {raw_online_date} | 解析结果: {parsed_str}")
+
         if not online_date or online_date.date() != target_date:
             continue
         platform_value = get_select_value(fields, FIELD_PLATFORM)
