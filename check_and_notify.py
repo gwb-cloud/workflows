@@ -58,13 +58,12 @@ ESCALATION_DAYS = 2
 # 一项可以配多个人（比如P0需要多人确认），发消息时会一起@。
 # key 必须和下面 problems.append() 里的文案完全一致，改文案时这里也要同步改。
 ITEM_OWNERS = {
-    "验收无P0问题 未确认": ["Webb"],
+    "验收无P0问题 未确认": ["Webb","大力","苏宸"],
     "ForBud-Mac 更新记录 未更新": ["Webb"],
     "ForBud-iPhone 更新记录 未更新": ["Webb"],
     "ForBud-后台 更新记录 未更新": ["Webb"],
     "盲测用例 未在24H内录入": ["雨纯"],
     "帮助文档 未在24H内更新": ["爱德"],
-    "多语言走查 未确认": ["爱德"],
 }
 
 # 姓名 → 蜂巢账号ID，需要你实际去蜂巢后台/找同事拿到真实ID后填进来
@@ -73,6 +72,7 @@ PERSON_BEEHIVE_ID = {
     "爱德": "ouv4qovznoxoxq",
     "雨纯": "ouv4qovzoc6cad",
     "苏宸": "ouvkmtuntg5xpk",
+    "大力": "ouv4qovzlarm8d",
 }
 
 FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
@@ -117,34 +117,47 @@ def get_records(token):
 
 
 def send_to_beehive(text, target=DEFAULT_TARGET, at_names=None):
-    """发送消息到指定的蜂巢群。传入 at_names（姓名列表）则会@对应的人，
-    需要该姓名在 PERSON_BEEHIVE_ID 里配置了蜂巢账号ID，否则跳过@（仍会发普通文本）。"""
+    """发送消息到指定的蜂巢群。
+    text 里如果已经包含"@姓名"这种行内占位（调用方自己拼好的），
+    at_names 要传入一份姓名列表，顺序、次数要跟 text 里"@姓名"出现的顺序、次数一一对应
+    （同一个人在text里@了几次，at_names里就要出现几次），这样蜂巢才能正确渲染成真正的@。
+    """
     webhook_url = WEBHOOK_MAP.get(target)
     if not webhook_url:
         print(f"⚠️ 未配置「{target}」对应的 webhook 地址，跳过发送。消息内容：{text}")
         return
 
     at_ids = []
-    at_display = []
     for name in (at_names or []):
         beehive_id = PERSON_BEEHIVE_ID.get(name)
         if beehive_id:
             at_ids.append(beehive_id)
-            at_display.append(f"@{name}")
         else:
-            print(f"⚠️ 未找到 {name} 对应的蜂巢账号ID，本次跳过@该人，请检查 PERSON_BEEHIVE_ID 配置")
+            print(f"⚠️ 未找到 {name} 对应的蜂巢账号ID，这处@可能不会生效，请检查 PERSON_BEEHIVE_ID 配置")
 
     if at_ids:
-        full_text = " ".join(at_display) + " " + text
-        payload = {
-            "msg_type": "at_text",
-            "content": {"text": full_text, "atUserList": at_ids},
-        }
+        payload = {"msg_type": "at_text", "content": {"text": text, "atUserList": at_ids}}
     else:
         payload = {"msg_type": "text", "content": {"text": text}}
 
     resp = requests.post(webhook_url, json=payload, timeout=10)
     print(f"发送到「{target}」结果: {resp.status_code} {resp.text}")
+
+
+def build_problem_lines(problems):
+    """把问题列表拼成带行内@的文本行，同时返回一份跟"@姓名"出现顺序一致的姓名列表。
+    problems 是 (问题描述, 超期天数) 的列表。"""
+    lines = []
+    at_names_in_order = []
+    for p, _ in problems:
+        owners = ITEM_OWNERS.get(p, [])
+        if owners:
+            owner_text = " ".join(f"@{o}" for o in owners)
+            lines.append(f"- {p} {owner_text}")
+            at_names_in_order.extend(owners)
+        else:
+            lines.append(f"- {p}")
+    return lines, at_names_in_order
 
 
 def parse_date(ms_timestamp):
@@ -225,21 +238,21 @@ def main():
                 problems.append(("帮助文档 未在24H内更新", overdue))
 
         if problems:
-            text = f"⚠️ 版本 {version} 验收巡检提醒：\n" + "\n".join(f"- {p}" for p, _ in problems)
-            owners = sorted({name for p, _ in problems for name in ITEM_OWNERS.get(p, [])})
-            send_to_beehive(text, target="验收群", at_names=owners)
-            send_to_beehive(text, target="产品群", at_names=owners)
+            lines, at_names_in_order = build_problem_lines(problems)
+            text = f"⚠️ 版本 {version} 验收巡检提醒：\n" + "\n".join(lines)
+            send_to_beehive(text, target="验收群", at_names=at_names_in_order)
+            send_to_beehive(text, target="产品群", at_names=at_names_in_order)
             print(text)
 
             # 超期天数达到升级阈值的，产品群额外再收一条更严肃的预警
-            escalated = [p for p, overdue in problems if overdue >= ESCALATION_DAYS]
+            escalated = [(p, overdue) for p, overdue in problems if overdue >= ESCALATION_DAYS]
             if escalated:
-                esc_owners = sorted({name for p in escalated for name in ITEM_OWNERS.get(p, [])})
+                esc_lines, esc_at_names = build_problem_lines(escalated)
                 esc_text = (
                     f"🚨 版本 {version} 以下事项已超期 {ESCALATION_DAYS} 天以上，大概率将计入本月黑榜：\n"
-                    + "\n".join(f"- {p}" for p in escalated)
+                    + "\n".join(esc_lines)
                 )
-                send_to_beehive(esc_text, target="产品群", at_names=esc_owners)
+                send_to_beehive(esc_text, target="产品群", at_names=esc_at_names)
                 print(esc_text)
         else:
             print(f"版本 {version} 巡检通过，无异常")
