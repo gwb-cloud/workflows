@@ -10,6 +10,11 @@ on:
         description: '指定要检查的发布日期，格式 2026-08-21，留空则默认今天'
         required: false
         default: ''
+      debug:
+        description: '打印详细调试日志（每条记录的上线日期原始值和解析结果）'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   summary:
@@ -26,3 +31,4 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           BEEHIVE_WEBHOOK_P2_WORKFLOW: ${{ secrets.BEEHIVE_WEBHOOK_P2_WORKFLOW }}
           TARGET_RELEASE_DATE: ${{ github.event.inputs.target_date }}
+          DEBUG: ${{ github.event.inputs.debug }}
