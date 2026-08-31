@@ -49,10 +49,31 @@ FIELD_I18N_CHECK = "多语言走查"
 P0_DONE_VALUE = "是"
 
 # 巡检提醒默认发到哪个群（以后红黑榜等其他消息可以指定发"产品群"）
-DEFAULT_TARGET = "产品群"
+DEFAULT_TARGET = "验收群"
 
 # 某项问题超期这么多天还没处理，额外抄送产品群做提前预警
 ESCALATION_DAYS = 2
+
+# 各检查项固定对应的负责人（按姓名），不随版本变化。
+# 一项可以配多个人（比如P0需要多人确认），发消息时会一起@。
+# key 必须和下面 problems.append() 里的文案完全一致，改文案时这里也要同步改。
+ITEM_OWNERS = {
+    "验收无P0问题 未确认": ["Webb"],
+    "ForBud-Mac 更新记录 未更新": ["Webb"],
+    "ForBud-iPhone 更新记录 未更新": ["Webb"],
+    "ForBud-后台 更新记录 未更新": ["Webb"],
+    "盲测用例 未在24H内录入": ["雨纯"],
+    "帮助文档 未在24H内更新": ["爱德"],
+    "多语言走查 未确认": ["爱德"],
+}
+
+# 姓名 → 蜂巢账号ID，需要你实际去蜂巢后台/找同事拿到真实ID后填进来
+PERSON_BEEHIVE_ID = {
+    "Webb": "ouv4qovzpupe9m",
+    "爱德": "ouv4qovznoxoxq",
+    "雨纯": "ouv4qovzoc6cad",
+    "苏宸": "ouvkmtuntg5xpk",
+}
 
 FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
 
@@ -95,17 +116,34 @@ def get_records(token):
     return records
 
 
-def send_to_beehive(text, target=DEFAULT_TARGET):
-    """发送文本消息到指定的蜂巢群"""
+def send_to_beehive(text, target=DEFAULT_TARGET, at_names=None):
+    """发送消息到指定的蜂巢群。传入 at_names（姓名列表）则会@对应的人，
+    需要该姓名在 PERSON_BEEHIVE_ID 里配置了蜂巢账号ID，否则跳过@（仍会发普通文本）。"""
     webhook_url = WEBHOOK_MAP.get(target)
     if not webhook_url:
         print(f"⚠️ 未配置「{target}」对应的 webhook 地址，跳过发送。消息内容：{text}")
         return
-    resp = requests.post(
-        webhook_url,
-        json={"msg_type": "text", "content": {"text": text}},
-        timeout=10,
-    )
+
+    at_ids = []
+    at_display = []
+    for name in (at_names or []):
+        beehive_id = PERSON_BEEHIVE_ID.get(name)
+        if beehive_id:
+            at_ids.append(beehive_id)
+            at_display.append(f"@{name}")
+        else:
+            print(f"⚠️ 未找到 {name} 对应的蜂巢账号ID，本次跳过@该人，请检查 PERSON_BEEHIVE_ID 配置")
+
+    if at_ids:
+        full_text = " ".join(at_display) + " " + text
+        payload = {
+            "msg_type": "at_text",
+            "content": {"text": full_text, "atUserList": at_ids},
+        }
+    else:
+        payload = {"msg_type": "text", "content": {"text": text}}
+
+    resp = requests.post(webhook_url, json=payload, timeout=10)
     print(f"发送到「{target}」结果: {resp.status_code} {resp.text}")
 
 
@@ -188,18 +226,20 @@ def main():
 
         if problems:
             text = f"⚠️ 版本 {version} 验收巡检提醒：\n" + "\n".join(f"- {p}" for p, _ in problems)
-            send_to_beehive(text, target="验收群")
-            send_to_beehive(text, target="产品群")
+            owners = sorted({name for p, _ in problems for name in ITEM_OWNERS.get(p, [])})
+            send_to_beehive(text, target="验收群", at_names=owners)
+            send_to_beehive(text, target="产品群", at_names=owners)
             print(text)
 
             # 超期天数达到升级阈值的，产品群额外再收一条更严肃的预警
             escalated = [p for p, overdue in problems if overdue >= ESCALATION_DAYS]
             if escalated:
+                esc_owners = sorted({name for p in escalated for name in ITEM_OWNERS.get(p, [])})
                 esc_text = (
                     f"🚨 版本 {version} 以下事项已超期 {ESCALATION_DAYS} 天以上，大概率将计入本月黑榜：\n"
                     + "\n".join(f"- {p}" for p in escalated)
                 )
-                send_to_beehive(esc_text, target="产品群")
+                send_to_beehive(esc_text, target="产品群", at_names=esc_owners)
                 print(esc_text)
         else:
             print(f"版本 {version} 巡检通过，无异常")
