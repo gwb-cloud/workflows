@@ -173,12 +173,12 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 def parse_date(ms_timestamp):
-    """飞书日期字段返回的是毫秒级时间戳，统一按北京时间解析。
-    不能用系统本地时区解读——GitHub Actions 跑在 UTC，直接用 fromtimestamp()
-    会把"北京时间当天0点"解析成前一天，导致发布日期判断偏移，进而影响T+0/T+1天数计算。"""
+    """飞书日期字段返回的是毫秒级时间戳。经实测验证：这类"纯日期"字段换算成北京时间后，
+    时钟部分固定停在 23:00（比表格里显示的日期的0点少1小时），底层时区基准跟北京时间差1小时。
+    这里换算成北京时间后再加1小时，才能拿到表格里实际显示的那个日期。"""
     if not ms_timestamp:
         return None
-    return datetime.fromtimestamp(ms_timestamp / 1000, tz=BEIJING_TZ)
+    return datetime.fromtimestamp(ms_timestamp / 1000, tz=BEIJING_TZ) + timedelta(hours=1)
 
 
 def is_checked(fields, field_name):
