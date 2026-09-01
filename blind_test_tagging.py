@@ -10,6 +10,7 @@
 
 import requests
 import os
+import random
 from datetime import datetime, timezone, timedelta
 
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -31,6 +32,9 @@ FIELD_MODULE = "二级模块"
 FIELD_TAG = "本次抽检版本号"
 
 TARGET_DATE_STR = os.environ.get("TARGET_RELEASE_DATE", "")
+
+# 关键词匹配数量不够时，从未验证用例里随机补齐到这个数
+MIN_SAMPLE_SIZE = 200
 
 
 def get_tenant_token():
@@ -129,6 +133,57 @@ def get_select_value(fields, field_name):
     return ""
 
 
+def get_field_type(token, app_token, table_id, field_name):
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+    resp = requests.get(url, headers=headers, timeout=10)
+    data = resp.json()
+    if data.get("code") != 0:
+        raise RuntimeError(f"拉取字段失败：{data}")
+    for f in data["data"]["items"]:
+        if f["field_name"] == field_name:
+            return f["type"], f.get("field_id")
+    return None, None
+
+
+def ensure_multi_select_option(token, app_token, table_id, field_id, option_name):
+    """多选字段写入前，确认这个选项存在，不存在就先加上"""
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields/{field_id}"
+    resp = requests.get(url, headers=headers, timeout=10)
+    data = resp.json()
+    if data.get("code") != 0:
+        raise RuntimeError(f"读取字段详情失败：{data}")
+    options = data["data"]["field"].get("property", {}).get("options", [])
+    if any(o["name"] == option_name for o in options):
+        return
+    options.append({"name": option_name})
+    resp = requests.put(url, headers=headers, json={
+        "field_name": data["data"]["field"]["field_name"],
+        "type": 4,
+        "property": {"options": options},
+    }, timeout=10)
+    data = resp.json()
+    if data.get("code") != 0:
+        raise RuntimeError(f"新增多选选项失败：{data}")
+
+
+def get_multi_select_values(fields, field_name):
+    value = fields.get(field_name)
+    if not isinstance(value, list):
+        return []
+    result = []
+    for v in value:
+        result.append(v.get("text", "") if isinstance(v, dict) else str(v))
+    return result
+
+
+def is_case_done(fields):
+    iphone = get_select_value(fields, "iPhone验收结果")
+    mac = get_select_value(fields, "Mac验收结果")
+    return iphone in {"通过", "不通过"} and mac in {"通过", "不通过"}
+
+
 def main():
     token = get_tenant_token()
     now = datetime.now(BEIJING_TZ)
@@ -167,24 +222,57 @@ def main():
     # 拿当月验收表所有用例，按"二级模块"关键词匹配需求描述
     blind_records = get_all_records(token, BLIND_TEST_APP_TOKEN, blind_table_id)
     tag_value = target_date.strftime("%Y-%m-%d")
-    matched_count = 0
 
+    matched_ids = []
     for r in blind_records:
         fields = r["fields"]
         module = get_text_value(fields, FIELD_MODULE)
-        if not module:
-            continue
-        if any(module in desc for desc in features):
+        if module and any(module in desc for desc in features):
+            matched_ids.append(r["record_id"])
+
+    print(f"关键词匹配到 {len(matched_ids)} 条")
+
+    if len(matched_ids) < MIN_SAMPLE_SIZE:
+        matched_set = set(matched_ids)
+        # 从未验证过、且还没被匹配到的用例里随机补齐
+        pool = [r["record_id"] for r in blind_records
+                if r["record_id"] not in matched_set and not is_case_done(r["fields"])]
+        need_more = MIN_SAMPLE_SIZE - len(matched_ids)
+        supplement = random.sample(pool, min(need_more, len(pool)))
+        matched_ids.extend(supplement)
+        print(f"数量不足{MIN_SAMPLE_SIZE}条，从未验证用例里随机补充 {len(supplement)} 条")
+        if len(pool) < need_more:
+            print(f"⚠️ 未验证用例池只剩 {len(pool)} 条，本次实际总数不足{MIN_SAMPLE_SIZE}条")
+
+    # 检查"本次抽检版本号"字段的实际类型，文本/多选两种写法不同
+    field_type, field_id = get_field_type(token, BLIND_TEST_APP_TOKEN, blind_table_id, FIELD_TAG)
+    if field_type is None:
+        raise RuntimeError(f"没找到字段 {FIELD_TAG}")
+
+    records_by_id = {r["record_id"]: r["fields"] for r in blind_records}
+    tagged_count = 0
+
+    for record_id in matched_ids:
+        fields = records_by_id[record_id]
+        if field_type == 4:  # 多选
+            existing = set(get_multi_select_values(fields, FIELD_TAG))
+            if tag_value in existing:
+                continue
+            ensure_multi_select_option(token, BLIND_TEST_APP_TOKEN, blind_table_id, field_id, tag_value)
+            existing.add(tag_value)
+            update_record(token, BLIND_TEST_APP_TOKEN, blind_table_id, record_id,
+                          {FIELD_TAG: sorted(existing)})
+        else:  # 文本（历史表兼容）
             existing_tag = get_text_value(fields, FIELD_TAG)
             tags = set(t.strip() for t in existing_tag.split(",") if t.strip())
             if tag_value in tags:
-                continue  # 已经打过标，不重复处理
+                continue
             tags.add(tag_value)
-            update_record(token, BLIND_TEST_APP_TOKEN, blind_table_id, r["record_id"],
+            update_record(token, BLIND_TEST_APP_TOKEN, blind_table_id, record_id,
                           {FIELD_TAG: ",".join(sorted(tags))})
-            matched_count += 1
+        tagged_count += 1
 
-    print(f"本次共匹配并打标 {matched_count} 条用例（标记：{tag_value}）")
+    print(f"本次共打标 {tagged_count} 条用例（标记：{tag_value}）")
 
 
 if __name__ == "__main__":

@@ -33,20 +33,24 @@ FIELD_SOURCE_MODULE = "二级模块"
 
 # 新建月度验收表的字段结构。type 编号是飞书官方定义：1=文本 3=单选 5=日期 11=人员
 # 如果建表报错提示字段类型不对，多半是这几个编号需要按报错信息调整
-NEW_TABLE_FIELDS = [
-    {"field_name": "目标", "type": 1},
-    {"field_name": "二级模块", "type": 1},
-    {"field_name": "验收人", "type": 11},
-    {"field_name": "iPhone验收结果", "type": 3, "property": {"options": [
-        {"name": "待验收"}, {"name": "通过"}, {"name": "不通过"}
-    ]}},
-    {"field_name": "Mac验收结果", "type": 3, "property": {"options": [
-        {"name": "待验收"}, {"name": "通过"}, {"name": "不通过"}
-    ]}},
-    {"field_name": "iPhone验收时间", "type": 5},
-    {"field_name": "Mac验收时间", "type": 5},
-    {"field_name": "本次抽检版本号", "type": 1},  # 预留给下一步"发版抽检打标"用
-]
+# 新建月度验收表的字段结构。type 编号是飞书官方定义：1=文本 3=单选 4=多选 5=日期 11=人员
+# 如果建表报错提示字段类型不对，多半是这几个编号需要按报错信息调整
+# "二级模块"的具体选项列表是运行时从原始目标表动态读取的，见 build_new_table_fields()
+def build_new_table_fields(module_options):
+    return [
+        {"field_name": "目标", "type": 1},
+        {"field_name": "二级模块", "type": 3, "property": {"options": module_options}},
+        {"field_name": "验收人", "type": 11},
+        {"field_name": "iPhone验收结果", "type": 3, "property": {"options": [
+            {"name": "待验收"}, {"name": "通过"}, {"name": "不通过"}
+        ]}},
+        {"field_name": "Mac验收结果", "type": 3, "property": {"options": [
+            {"name": "待验收"}, {"name": "通过"}, {"name": "不通过"}
+        ]}},
+        {"field_name": "iPhone验收时间", "type": 5},
+        {"field_name": "Mac验收时间", "type": 5},
+        {"field_name": "本次抽检版本号", "type": 4},  # 多选，支持一条用例同时被多个发布日期标记
+    ]
 
 
 def get_tenant_token():
@@ -271,7 +275,17 @@ def main():
     if new_table_id:
         print(f"找到已存在的表：{target_table_name}（table_id: {new_table_id}），将直接写入")
     else:
-        new_table_id = create_table(token, target_table_name, NEW_TABLE_FIELDS)
+        # 读取原始目标表"二级模块"字段的选项，作为新表同字段的快照（不是实时引用，源表以后加选项不会自动同步）
+        source_fields = get_table_fields(token, SOURCE_TABLE_ID)
+        module_options = []
+        for f in source_fields:
+            if f["field_name"] == FIELD_SOURCE_MODULE:
+                module_options = f.get("property", {}).get("options", [])
+                break
+        module_options = [{"name": o["name"]} for o in module_options]
+        print(f"读取到二级模块选项快照 {len(module_options)} 个")
+
+        new_table_id = create_table(token, target_table_name, build_new_table_fields(module_options))
         print(f"已创建新表：{target_table_name}（table_id: {new_table_id}）")
 
     # ===== 第三步：读取用例库，按顺序循环分配，批量写入 =====

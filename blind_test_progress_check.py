@@ -180,15 +180,17 @@ def main():
             if pending > 0:
                 lines.append(f"- {owner}：还剩 {pending}/{owner_total[owner]} 条")
 
-    # ===== 检查二：各发布日期抽检完成度 =====
+    # ===== 检查二：各发布日期抽检完成度（兼容文本/多选两种字段类型）=====
     tag_records = defaultdict(list)
     for r in records:
         fields = r["fields"]
-        tag_str = get_text_value(fields, FIELD_TAG)
-        if not tag_str:
-            continue
-        for tag in tag_str.split(","):
-            tag = tag.strip()
+        raw = fields.get(FIELD_TAG)
+        if isinstance(raw, list):  # 多选字段
+            tags = [v.get("text", "") if isinstance(v, dict) else str(v) for v in raw]
+        else:  # 文本字段（历史表兼容）
+            tag_str = get_text_value(fields, FIELD_TAG)
+            tags = [t.strip() for t in tag_str.split(",") if t.strip()]
+        for tag in tags:
             if tag:
                 tag_records[tag].append(fields)
 
