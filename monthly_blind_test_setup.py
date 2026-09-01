@@ -26,7 +26,7 @@ FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET_CLI"]
 
 BASE_APP_TOKEN = "FnFab3FDKa0JU6sqa19cDVpHnM7"
 ROSTER_TABLE_ID = "tblbuVpl9xK3E0Rc"      # 人员名单
-SOURCE_TABLE_ID = "tblS5QioOH5V2hSq"      # 原始目标表（盲测用例库）
+SOURCE_TABLE_ID = "tbl46z8GYP5HN1MJ"      # 原始目标表（盲测用例库）
 
 FIELD_SOURCE_TARGET = "目标"
 FIELD_SOURCE_MODULE = "二级模块"
@@ -36,7 +36,7 @@ FIELD_SOURCE_MODULE = "二级模块"
 NEW_TABLE_FIELDS = [
     {"field_name": "目标", "type": 1},
     {"field_name": "二级模块", "type": 1},
-    {"field_name": "验收人", "type": 1},
+    {"field_name": "验收人", "type": 11},
     {"field_name": "iPhone验收结果", "type": 3, "property": {"options": [
         {"name": "待验收"}, {"name": "通过"}, {"name": "不通过"}
     ]}},
@@ -125,21 +125,38 @@ def get_select_value(fields, field_name):
     return ""
 
 
-def get_next_month_field_name(existing_field_names):
-    """人员名单表里已有的 M6人员/M7人员... 找最大编号，返回下一个字段名和上一个编号"""
-    max_n = 0
-    for name in existing_field_names:
-        m = re.match(r"M(\d+)人员", name)
-        if m:
-            max_n = max(max_n, int(m.group(1)))
-    return f"M{max_n + 1}人员", max_n
-
-
 def compute_new_order(prev_order):
     """循环左移一位：第一位挪到最后"""
     if not prev_order:
         return []
     return prev_order[1:] + [prev_order[0]]
+
+
+def get_all_tables(token, app_token=BASE_APP_TOKEN):
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables"
+    tables = []
+    page_token = None
+    while True:
+        params = {"page_size": 100}
+        if page_token:
+            params["page_token"] = page_token
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        data = resp.json()
+        if data.get("code") != 0:
+            raise RuntimeError(f"拉取表列表失败：{data}")
+        tables.extend(data["data"]["items"])
+        if not data["data"].get("has_more"):
+            break
+        page_token = data["data"].get("page_token")
+    return tables
+
+
+def find_table_by_name(token, table_name, app_token=BASE_APP_TOKEN):
+    for t in get_all_tables(token, app_token):
+        if t["name"] == table_name:
+            return t["table_id"]
+    return None
 
 
 def create_field(token, table_id, field_name, field_type, app_token=BASE_APP_TOKEN, property_=None):
@@ -191,49 +208,73 @@ def batch_create_records(token, table_id, records, app_token=BASE_APP_TOKEN, chu
 def main():
     token = get_tenant_token()
 
-    # ===== 第一步：读取人员名单，算出本月新顺序 =====
+    now = datetime.now(BEIJING_TZ)
+    current_month = now.month
+    target_field_name = f"M{current_month}人员"
+    target_table_name = f"M{current_month}验收表"
+
+    # ===== 第一步：确定本月人员顺序 =====
     roster_fields = get_table_fields(token, ROSTER_TABLE_ID)
     field_names = [f["field_name"] for f in roster_fields]
-    new_field_name, prev_n = get_next_month_field_name(field_names)
-
-    if prev_n == 0:
-        raise RuntimeError("没有找到任何 M#人员 历史列，无法确定上月顺序，请检查人员名单表结构")
-
-    prev_field_name = f"M{prev_n}人员"
-
     roster_records = get_all_records(token, ROSTER_TABLE_ID)
-    prev_order = []
-    name_to_field_value = {}
-    for r in roster_records:
-        fields = r["fields"]
-        name = get_person_name(fields, prev_field_name)
-        if name:
-            prev_order.append(name)
-            name_to_field_value[name] = fields.get(prev_field_name)
 
-    new_order = compute_new_order(prev_order)
-    print(f"上月（{prev_field_name}）顺序：{prev_order}")
-    print(f"本月（{new_field_name}）新顺序：{new_order}")
-    print("⚠️ 请人工核对以上新顺序是否需要处理入职/离职调整，脚本不会自动判断")
+    if target_field_name in field_names:
+        # 本月的列已经存在（提前手工/批量建好过），直接复用，不重新计算、不覆盖
+        print(f"{target_field_name} 已存在，直接复用现有顺序，不重新计算")
+        new_order = []
+        name_to_field_value = {}
+        for r in roster_records:
+            fields = r["fields"]
+            name = get_person_name(fields, target_field_name)
+            if name:
+                new_order.append(name)
+                name_to_field_value[name] = fields.get(target_field_name)
+    else:
+        # 本月的列不存在，从最近一个存在的月份列循环左移一位，生成新列
+        existing_months = []
+        for name in field_names:
+            m = re.match(r"M(\d+)人员", name)
+            if m:
+                existing_months.append(int(m.group(1)))
+        if not existing_months:
+            raise RuntimeError("没有找到任何 M#人员 历史列，无法计算新顺序，请检查人员名单表结构")
+        prev_field_name = f"M{max(existing_months)}人员"
 
-    # 新增字段（人员类型，跟其他 M#人员 列保持一致）
-    create_field(token, ROSTER_TABLE_ID, new_field_name, field_type=11)
+        prev_order = []
+        name_to_field_value = {}
+        for r in roster_records:
+            fields = r["fields"]
+            name = get_person_name(fields, prev_field_name)
+            if name:
+                prev_order.append(name)
+                name_to_field_value[name] = fields.get(prev_field_name)
 
-    for idx, name in enumerate(new_order):
-        if idx >= len(roster_records):
-            print(f"⚠️ 人员名单表行数不够，第{idx + 1}位（{name}）没有对应行可写，跳过")
-            continue
-        record_id = roster_records[idx]["record_id"]
-        update_record(token, ROSTER_TABLE_ID, record_id, {new_field_name: name_to_field_value[name]})
+        new_order = compute_new_order(prev_order)
+        print(f"参考顺序（{prev_field_name}）：{prev_order}")
+        print(f"生成新顺序（{target_field_name}）：{new_order}")
+        print("⚠️ 请人工核对以上新顺序是否需要处理入职/离职调整")
 
-    print(f"人员名单表已新增 {new_field_name} 列")
+        create_field(token, ROSTER_TABLE_ID, target_field_name, field_type=11)
+        for idx, name in enumerate(new_order):
+            if idx >= len(roster_records):
+                print(f"⚠️ 人员名单表行数不够，第{idx + 1}位（{name}）没有对应行可写，跳过")
+                continue
+            record_id = roster_records[idx]["record_id"]
+            update_record(token, ROSTER_TABLE_ID, record_id, {target_field_name: name_to_field_value[name]})
+        print(f"人员名单表已新增 {target_field_name} 列")
 
-    # ===== 第二步：新建本月验收表 =====
-    month_label = new_field_name.replace("人员", "验收表")
-    new_table_id = create_table(token, month_label, NEW_TABLE_FIELDS)
-    print(f"已创建新表：{month_label}（table_id: {new_table_id}）")
+    if not new_order:
+        raise RuntimeError(f"{target_field_name} 没有读到任何人员，无法继续分配")
 
-    # ===== 第三步：读取用例库，按新顺序循环分配，批量写入 =====
+    # ===== 第二步：找本月验收表，没有就建 =====
+    new_table_id = find_table_by_name(token, target_table_name)
+    if new_table_id:
+        print(f"找到已存在的表：{target_table_name}（table_id: {new_table_id}），将直接写入")
+    else:
+        new_table_id = create_table(token, target_table_name, NEW_TABLE_FIELDS)
+        print(f"已创建新表：{target_table_name}（table_id: {new_table_id}）")
+
+    # ===== 第三步：读取用例库，按顺序循环分配，批量写入 =====
     source_records = get_all_records(token, SOURCE_TABLE_ID)
     print(f"用例库共 {len(source_records)} 条")
 
@@ -242,16 +283,16 @@ def main():
         fields = r["fields"]
         target = get_text_value(fields, FIELD_SOURCE_TARGET)
         module = get_select_value(fields, FIELD_SOURCE_MODULE)
-        owner = new_order[i % len(new_order)] if new_order else ""
+        owner_name = new_order[i % len(new_order)]
         records_to_insert.append({
             "目标": target,
             "二级模块": module,
-            "验收人": owner,
+            "验收人": name_to_field_value[owner_name],
         })
 
     batch_create_records(token, new_table_id, records_to_insert)
-    print(f"本月验收表已写入 {len(records_to_insert)} 条用例")
-    print(f"✅ 全部完成：{month_label}（table_id: {new_table_id}）")
+    print(f"{target_table_name} 已写入 {len(records_to_insert)} 条用例")
+    print(f"✅ 全部完成：{target_table_name}（table_id: {new_table_id}）")
 
 
 if __name__ == "__main__":
