@@ -1,0 +1,21 @@
+name: 盲测完成情况校验
+
+on:
+  schedule:
+    - cron: '0 4 * * *'   # UTC 4点 = 北京时间中午12点
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python blind_test_progress_check.py
+        env:
+          FEISHU_APP_ID_CLI: ${{ secrets.FEISHU_APP_ID_CLI }}
+          FEISHU_APP_SECRET_CLI: ${{ secrets.FEISHU_APP_SECRET_CLI }}
+          BEEHIVE_WEBHOOK_P3_REDBLACK: ${{ secrets.BEEHIVE_WEBHOOK_P3_REDBLACK }}

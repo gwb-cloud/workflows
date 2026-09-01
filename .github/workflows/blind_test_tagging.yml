@@ -1,0 +1,26 @@
+name: 发版抽检打标
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # UTC 3点 = 北京时间上午11点
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: '指定要检查的发布日期，格式 2026-09-03，留空则默认今天'
+        required: false
+        default: ''
+
+jobs:
+  tagging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python blind_test_tagging.py
+        env:
+          FEISHU_APP_ID_CLI: ${{ secrets.FEISHU_APP_ID_CLI }}
+          FEISHU_APP_SECRET_CLI: ${{ secrets.FEISHU_APP_SECRET_CLI }}
+          TARGET_RELEASE_DATE: ${{ github.event.inputs.target_date }}
