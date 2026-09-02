@@ -113,9 +113,12 @@ def parse_date(ms_timestamp):
 
 
 def get_text_value(fields, field_name):
+    """兼容文本(字符串)、多行文本([{"text":...}])、单选({"text":...})三种返回格式"""
     value = fields.get(field_name)
     if isinstance(value, str):
         return value
+    if isinstance(value, dict):
+        return value.get("text", "")
     if isinstance(value, list) and value:
         parts = []
         for v in value:
