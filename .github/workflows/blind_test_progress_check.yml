@@ -2,7 +2,7 @@ name: 盲测完成情况校验
 
 on:
   schedule:
-    - cron: '0 4 * * *'   # UTC 4点 = 北京时间中午12点
+    - cron: '0 10 * * *'   # UTC 10点 = 北京时间中午18点
   workflow_dispatch:
 
 jobs:
