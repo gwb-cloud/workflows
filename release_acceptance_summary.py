@@ -121,15 +121,20 @@ def get_records(token):
 def send_to_beehive(text, at_names=None):
     """发送消息。text 里若已包含"@姓名"行内占位，at_names 需要按出现顺序传入对应姓名列表。"""
     at_ids = []
+    at_users_info = []
     for name in (at_names or []):
         beehive_id = PERSON_BEEHIVE_ID.get(name)
         if beehive_id:
             at_ids.append(beehive_id)
+            at_users_info.append({"atUserID": beehive_id, "groupNickname": name})
         else:
             print(f"⚠️ 未找到 {name} 对应的蜂巢账号ID，这处@可能不会生效，请检查 PERSON_BEEHIVE_ID 配置")
 
     if at_ids:
-        payload = {"msg_type": "at_text", "content": {"text": text, "atUserList": at_ids}}
+        payload = {
+            "msg_type": "at_text",
+            "content": {"text": text, "atUserList": at_ids, "atUsersInfo": at_users_info},
+        }
     else:
         payload = {"msg_type": "text", "content": {"text": text}}
 

@@ -58,7 +58,7 @@ ESCALATION_DAYS = 2
 # 一项可以配多个人（比如P0需要多人确认），发消息时会一起@。
 # key 必须和下面 problems.append() 里的文案完全一致，改文案时这里也要同步改。
 ITEM_OWNERS = {
-    "验收无P0问题 未确认": ["苏宸"],
+    "验收无P0问题 未确认": ["Webb"],
     "ForBud-Mac 更新记录 未更新": ["Webb"],
     "ForBud-iPhone 更新记录 未更新": ["Webb"],
     "ForBud-后台 更新记录 未更新": ["Webb"],
@@ -81,6 +81,7 @@ PERSON_BEEHIVE_ID = {
     "唐炜": "ouv4qovznbncqw",
     "严光": "ouvgwgfyt1elue",
 }
+
 
 FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
 
@@ -135,15 +136,20 @@ def send_to_beehive(text, target=DEFAULT_TARGET, at_names=None):
         return
 
     at_ids = []
+    at_users_info = []
     for name in (at_names or []):
         beehive_id = PERSON_BEEHIVE_ID.get(name)
         if beehive_id:
             at_ids.append(beehive_id)
+            at_users_info.append({"atUserID": beehive_id, "groupNickname": name})
         else:
             print(f"⚠️ 未找到 {name} 对应的蜂巢账号ID，这处@可能不会生效，请检查 PERSON_BEEHIVE_ID 配置")
 
     if at_ids:
-        payload = {"msg_type": "at_text", "content": {"text": text, "atUserList": at_ids}}
+        payload = {
+            "msg_type": "at_text",
+            "content": {"text": text, "atUserList": at_ids, "atUsersInfo": at_users_info},
+        }
     else:
         payload = {"msg_type": "text", "content": {"text": text}}
 
