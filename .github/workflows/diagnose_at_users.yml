@@ -1,0 +1,17 @@
+name: 诊断AT用户ID
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python diagnose_at_users.py
+        env:
+          BEEHIVE_WEBHOOK_YANSHOU: ${{ secrets.BEEHIVE_WEBHOOK_YANSHOU }}
