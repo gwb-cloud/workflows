@@ -1,70 +1,75 @@
 # -*- coding: utf-8 -*-
 """
-本次发布验收总览脚本
-功能：读取"产品部项目管理"分工表，筛选上线日期等于目标发布日期的所有需求，
-      统计验收完成情况（产品owner是否已介入验证），未验收的@对应产品owner提醒。
+本次发布验收总览脚本（v2）
+固定周五发布：每天自动算出"本周五"作为目标发布日期，从周一到周五每天都检查同一批需求，
+提前5个工作日开始提醒，而不是只在发布当天检查一次。
+
+统计口径：
+1. 按人维度：每个产品owner这次分到几个需求，通过/待验收/不通过 分别几个
+2. 按端维度：Mac验收了多少条、iPhone验收了多少条，其中各自多少条不通过（发现问题数）
+3. 验收表遗留问题：用"二级模块"关键词模糊匹配本次发布相关的需求，统计验收表里
+   处理状态=待修复 的问题数量，按"问题定性"（P0-P4）分类
 
 需要在 GitHub Actions 的 Secrets 里配置：
 - FEISHU_APP_ID
 - FEISHU_APP_SECRET
 - BEEHIVE_WEBHOOK_P2_WORKFLOW
 
-⚠️ 下面两个字段名在你发的截图里是被截断显示的，务必去表格里核对一次完整、准确的字段名，
-   跟表格里实际的不一致会导致读不到数据（不会报错，只会静默漏检）：
-   - FIELD_OWNER_VERIFY_TIME
-   - FIELD_REVIEW_DATE（当前脚本逻辑没直接用到这个，先留着，后面要扩展评审环节检查时会用到）
+⚠️ 验收表的"二级模块"字段名是按你们其他表的命名习惯猜的，务必去表格里核对一次，
+   不一致的话模糊匹配会全部落空（不会报错，只是匹配不到）。
 """
 
 import requests
 import os
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timezone, timedelta
 
-# ========== 配置区 ==========
+BEIJING_TZ = timezone(timedelta(hours=8))
 
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET"]
 BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_P2_WORKFLOW"]
 
-# 分工表（产品部项目管理）的 app_token 和 table_id
-TABLE_APP_TOKEN = "VhZebH05uaUlEyscWfWc2mMvnhc"
-TABLE_ID = "tbl1Gwx4r7oOcV8g"
+# 分工表（产品部项目管理）
+RELEASE_APP_TOKEN = "VhZebH05uaUlEyscWfWc2mMvnhc"
+RELEASE_TABLE_ID = "tbl1Gwx4r7oOcV8g"
 
 FIELD_PROJECT_DESC = "项目说明"
 FIELD_PRODUCT_OWNER = "产品owner"
 FIELD_ONLINE_DATE = "上线日期"
-FIELD_PLATFORM = "端"                    # 单选字段：Mac / iPhone / Mac/iPhone / 后台 / 其他
+FIELD_PLATFORM = "端"                    # 单选：Mac / iPhone / Mac/iPhone / 后台 / 其他
 
-# 按端拆分的验收结果字段，跟 ForBud 三份文档的划分对应
 PLATFORM_RESULT_FIELDS = {
     "Mac": "Mac验收结果",
     "iPhone": "iPhone验收结果",
     "后台": "后台验收结果",
 }
-
-# "端"字段的选项值 → 实际要检查哪些验收结果字段。
-# "Mac/iPhone"这种合并选项要拆成两个都检查；"其他"没有对应的结果字段，无法自动判断。
-# "端"字段的选项值 → 实际要检查哪些验收结果字段。
-# "Mac/iPhone"这种合并选项要拆成两个都检查。
-# "其他"/"无需验收"不会走到这里，在筛选阶段已经被 SKIP_PLATFORM_VALUES 排除掉了。
 PLATFORM_VALUE_MAP = {
     "Mac": ["Mac"],
     "iPhone": ["iPhone"],
     "Mac/iPhone": ["Mac", "iPhone"],
     "后台": ["后台"],
 }
-
-# "端"字段里，这个取值代表跟发版验收无关的任务（调研、线下方案等），
-# 直接跳过，不计入统计、不触发提醒
 SKIP_PLATFORM_VALUES = {"其他"}
 
 RESULT_PASS = "通过"
 RESULT_FAIL = "不通过"
 RESULT_SKIP = "无需验收"
 
-# 目标发布日期：默认取今天。手动触发测试时可以通过 workflow 输入指定日期，格式 2026-08-21
+# 验收表（问题记录），用于统计"本次发布相关，还有多少待修复问题"
+ISSUE_APP_TOKEN = "OR5ubORn3atfo3szLSTcbnVdnTf"
+ISSUE_TABLE_ID = "tbl3vBsukTCg1yrn"
+FIELD_ISSUE_TYPE = "问题定性"      # P0-P4
+FIELD_ISSUE_STATUS = "处理状态"
+FIELD_ISSUE_MODULE = "二级模块"    # ⚠️ 字段名待核对
+ISSUE_STATUS_PENDING = "待修复"
+
+# 目标发布日期：默认从分工表里自动找最近的即将到来的上线日期。手动触发测试时可以通过 workflow 输入指定日期，格式 2026-08-21
 TARGET_DATE_STR = os.environ.get("TARGET_RELEASE_DATE", "")
 
-# 调试模式：打印每条记录"上线日期"字段的原始值和解析结果，排查匹配不上的问题时打开
+# 提前多少个工作日开始提醒（含发布当天本身）
+ALERT_WINDOW_WORKDAYS = 5
+
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
 
 # 产品owner姓名 → 蜂巢账号ID，需要你实际维护补全
@@ -98,11 +103,11 @@ def get_tenant_token():
     return data["tenant_access_token"]
 
 
-def get_records(token):
+def get_all_records(token, app_token, table_id):
     records = []
     page_token = None
     headers = {"Authorization": f"Bearer {token}"}
-    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{TABLE_APP_TOKEN}/tables/{TABLE_ID}/records"
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records"
     while True:
         params = {"page_size": 100}
         if page_token:
@@ -119,7 +124,6 @@ def get_records(token):
 
 
 def send_to_beehive(text, at_names=None):
-    """发送消息。text 里若已包含"@姓名"行内占位，at_names 需要按出现顺序传入对应姓名列表。"""
     at_ids = []
     at_users_info = []
     for name in (at_names or []):
@@ -142,23 +146,47 @@ def send_to_beehive(text, at_names=None):
     print(f"发送结果: {resp.status_code} {resp.text}")
 
 
-from datetime import timezone, timedelta
-
-BEIJING_TZ = timezone(timedelta(hours=8))
-
-
 def parse_date(ms_timestamp):
-    """飞书日期字段返回的是毫秒级时间戳。经实测验证：这类"纯日期"字段换算成北京时间后，
-    时钟部分固定停在 23:00（也就是比表格里显示的那个日期的0点，正好少1小时），
-    说明字段底层锚定的时区基准跟北京时间差了1小时。这里在换算成北京时间后再加1小时，
-    把时间点"推过"零点，这样取 .date() 才能拿到表格里实际显示、你真正选的那个日期。"""
+    """飞书日期字段换算成北京时间后固定停在23:00，需要再加1小时才能拿到正确日期"""
     if not ms_timestamp:
         return None
     return datetime.fromtimestamp(ms_timestamp / 1000, tz=BEIJING_TZ) + timedelta(hours=1)
 
 
+def find_next_release_date(records, today):
+    """从分工表里找最近的即将到来的上线日期（今天或之后，允许1天宽限兼容日期刚过还没更新的过渡态），
+    作为下一次要监控的发布目标。取所有候选里最近的一个，不假设固定在周几。"""
+    candidate_dates = set()
+    for r in records:
+        fields = r.get("fields", {})
+        platform_value = get_select_value(fields, FIELD_PLATFORM)
+        if platform_value in SKIP_PLATFORM_VALUES:
+            continue
+        online_date = parse_date(fields.get(FIELD_ONLINE_DATE))
+        if not online_date:
+            continue
+        d = online_date.date()
+        if d >= today - timedelta(days=1):
+            candidate_dates.add(d)
+    if not candidate_dates:
+        return None
+    return min(candidate_dates)
+
+
+def workdays_between(start_date, end_date):
+    """计算 start_date 到 end_date（含首尾）之间有几个工作日（周一到周五）"""
+    if end_date < start_date:
+        return None
+    days = 0
+    d = start_date
+    while d <= end_date:
+        if d.weekday() < 5:
+            days += 1
+        d += timedelta(days=1)
+    return days
+
+
 def get_person_name(fields, field_name):
-    """人员字段通常返回 [{"name": "张三", "id": "ou_xxx"}]"""
     value = fields.get(field_name)
     if isinstance(value, list) and value:
         first = value[0]
@@ -169,22 +197,7 @@ def get_person_name(fields, field_name):
     return "未知"
 
 
-def get_multi_select_values(fields, field_name):
-    """多选字段，兼容字符串列表 / [{"text":...}] 两种返回格式"""
-    value = fields.get(field_name)
-    if not isinstance(value, list):
-        return []
-    result = []
-    for v in value:
-        if isinstance(v, dict):
-            result.append(v.get("text", ""))
-        else:
-            result.append(str(v))
-    return result
-
-
 def get_select_value(fields, field_name):
-    """单选字段，兼容字符串 / {"text":...} 两种返回格式"""
     value = fields.get(field_name)
     if isinstance(value, str):
         return value
@@ -193,13 +206,24 @@ def get_select_value(fields, field_name):
     return ""
 
 
-def evaluate_acceptance(fields):
-    """按"端"字段的单选值，映射到实际要检查的验收结果字段，返回 (总体状态, 涉及的端列表)
-    总体状态: '通过' / '不通过' / '未完成' / '无需验收' / '无法判断'
+def get_text_value(fields, field_name):
+    """兼容文本、多行文本、单选三种返回格式"""
+    value = fields.get(field_name)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return value.get("text", "")
+    if isinstance(value, list) and value:
+        parts = []
+        for v in value:
+            parts.append(v.get("text", "") if isinstance(v, dict) else str(v))
+        return "".join(parts)
+    return ""
 
-    某个端的验收结果字段若填了"无需验收"，该端会被排除，不参与判断；
-    如果涉及的端全部都是"无需验收"，整条需求返回'无需验收'。
-    '无法判断'只在"端"出现配置里没覆盖到的新选项值时触发，是兜底提醒。"""
+
+def evaluate_acceptance(fields):
+    """返回 (总体状态, 涉及的端列表)
+    总体状态: '通过' / '不通过' / '未完成' / '无需验收' / '无法判断'"""
     platform_value = get_select_value(fields, FIELD_PLATFORM)
     if not platform_value:
         return "未知", []
@@ -214,9 +238,7 @@ def evaluate_acceptance(fields):
         if field_name:
             statuses[p] = get_select_value(fields, field_name)
 
-    # 先排除标记为"无需验收"的端，不参与后续判断
     relevant = {p: s for p, s in statuses.items() if s != RESULT_SKIP}
-
     if not relevant:
         return "无需验收", list(statuses.keys())
 
@@ -231,17 +253,61 @@ def evaluate_acceptance(fields):
     return "通过", []
 
 
+def compute_platform_stats(matched_fields_list):
+    """按端统计：这个端总共需要验多少条、已经验了多少条、其中不通过多少条"""
+    stats = {p: {"total": 0, "done": 0, "failed": 0} for p in PLATFORM_RESULT_FIELDS}
+    for fields in matched_fields_list:
+        platform_value = get_select_value(fields, FIELD_PLATFORM)
+        actual_platforms = PLATFORM_VALUE_MAP.get(platform_value, [])
+        for p in actual_platforms:
+            field_name = PLATFORM_RESULT_FIELDS.get(p)
+            if not field_name:
+                continue
+            result = get_select_value(fields, field_name)
+            stats[p]["total"] += 1
+            if result in (RESULT_PASS, RESULT_FAIL):
+                stats[p]["done"] += 1
+            if result == RESULT_FAIL:
+                stats[p]["failed"] += 1
+    return stats
+
+
+def get_related_issues(token, feature_descriptions):
+    """从验收表里找处理状态=待修复、且二级模块能模糊匹配到本次发布需求的问题"""
+    records = get_all_records(token, ISSUE_APP_TOKEN, ISSUE_TABLE_ID)
+    matched = []
+    for r in records:
+        fields = r["fields"]
+        status = get_select_value(fields, FIELD_ISSUE_STATUS)
+        if status != ISSUE_STATUS_PENDING:
+            continue
+        module = get_text_value(fields, FIELD_ISSUE_MODULE)
+        if module and any(module in desc for desc in feature_descriptions):
+            matched.append(fields)
+    return matched
+
+
 def main():
     token = get_tenant_token()
-    records = get_records(token)
+    now = datetime.now(BEIJING_TZ)
+    today = now.date()
+
+    records = get_all_records(token, RELEASE_APP_TOKEN, RELEASE_TABLE_ID)
+    print(f"分工表共读取到 {len(records)} 条记录")
 
     if TARGET_DATE_STR:
         target_date = datetime.strptime(TARGET_DATE_STR, "%Y-%m-%d").date()
+        print(f"手动指定目标日期: {target_date}")
     else:
-        target_date = datetime.now(BEIJING_TZ).date()
-
-    print(f"目标日期: {target_date}")
-    print(f"共读取到 {len(records)} 条记录")
+        target_date = find_next_release_date(records, today)
+        if target_date is None:
+            print("分工表里没有找到任何即将到来的上线日期，跳过")
+            return
+        wd = workdays_between(today, target_date)
+        print(f"下一次发布：{target_date}（距今 {wd} 个工作日）")
+        if wd is None or wd > ALERT_WINDOW_WORKDAYS:
+            print(f"还没进入提前{ALERT_WINDOW_WORKDAYS}个工作日的提醒窗口，跳过")
+            return
 
     matched = []
     for record in records:
@@ -258,63 +324,81 @@ def main():
             continue
         platform_value = get_select_value(fields, FIELD_PLATFORM)
         if platform_value in SKIP_PLATFORM_VALUES:
-            continue  # 调研/线下方案等跟发版验收无关，直接跳过
+            continue
         matched.append(fields)
 
     if not matched:
-        print(f"{target_date} 没有匹配到上线日期为今天的需求，跳过")
+        print(f"{target_date} 没有匹配到上线日期为目标日期的需求，跳过")
         return
 
-    total = 0
-    passed, failed, pending, unclassified = [], [], [], []
+    # ===== 按人统计 =====
+    owner_stats = defaultdict(lambda: {"通过": 0, "待验收": 0, "不通过": 0})
+    feature_descriptions = []
 
     for fields in matched:
-        desc = fields.get(FIELD_PROJECT_DESC, "未命名需求")
-        owner = get_person_name(fields, FIELD_PRODUCT_OWNER)
-        status, related_platforms = evaluate_acceptance(fields)
-
+        status, _ = evaluate_acceptance(fields)
         if status == "无需验收":
-            continue  # 涉及的端全部标记无需验收，等同于这条需求不用验收，不计入统计
+            continue
+        owner = get_person_name(fields, FIELD_PRODUCT_OWNER)
+        desc = fields.get(FIELD_PROJECT_DESC, "未命名需求")
+        feature_descriptions.append(desc)
 
-        total += 1
         if status == "通过":
-            passed.append(desc)
+            owner_stats[owner]["通过"] += 1
         elif status == "不通过":
-            failed.append((desc, owner, related_platforms))
-        elif status == "无法判断":
-            unclassified.append((desc, owner, related_platforms))
-        else:
-            pending.append((desc, owner, related_platforms))
+            owner_stats[owner]["不通过"] += 1
+        else:  # 未完成 / 无法判断，统一归入待验收
+            owner_stats[owner]["待验收"] += 1
 
-    if total == 0:
+    if not owner_stats:
         print(f"{target_date} 匹配到的需求全部标记为无需验收，跳过发送")
         return
 
-    lines = [
-        f"📋 本次发布（{target_date}）验收总览：",
-        f"共 {total} 个需求，通过 {len(passed)} 个，不通过 {len(failed)} 个，"
-        f"未完成验收 {len(pending)} 个，无法自动判断 {len(unclassified)} 个",
-    ]
+    # ===== 按端统计 =====
+    platform_stats = compute_platform_stats(
+        [f for f in matched if evaluate_acceptance(f)[0] != "无需验收"]
+    )
 
+    # ===== 验收表遗留问题统计 =====
+    related_issues = get_related_issues(token, feature_descriptions)
+    issue_type_count = defaultdict(int)
+    for fields in related_issues:
+        issue_type = get_text_value(fields, FIELD_ISSUE_TYPE) or "未分类"
+        issue_type_count[issue_type] += 1
+
+    # ===== 拼装消息 =====
+    total_features = sum(sum(s.values()) for s in owner_stats.values())
+    lines = [f"📋 本次发布（{target_date}）验收总览：共 {total_features} 个需求"]
+
+    lines.append("【按人统计】")
     at_names_in_order = []
-
-    if failed:
-        lines.append("🔴 验收不通过：")
-        for desc, owner, platforms in failed:
-            lines.append(f"- {desc}（{'/'.join(platforms)}不通过） @{owner}")
+    for owner, s in sorted(owner_stats.items()):
+        owner_total = sum(s.values())
+        detail = f"通过{s['通过']}个"
+        if s["待验收"] > 0:
+            detail += f"，待验收{s['待验收']}个"
+        if s["不通过"] > 0:
+            detail += f"，不通过{s['不通过']}个"
+        line = f"- {owner}：共{owner_total}个需求，{detail}"
+        if s["待验收"] > 0 or s["不通过"] > 0:
+            line += f" @{owner}"
             at_names_in_order.append(owner)
+        lines.append(line)
 
-    if pending:
-        lines.append("🟡 未完成验收：")
-        for desc, owner, platforms in pending:
-            lines.append(f"- {desc}（{'/'.join(platforms)}待验收） @{owner}")
-            at_names_in_order.append(owner)
+    lines.append("【验收进度（按端）】")
+    for p in ["Mac", "iPhone", "后台"]:
+        s = platform_stats.get(p, {"total": 0, "done": 0, "failed": 0})
+        if s["total"] == 0:
+            continue
+        fail_text = f"，其中不通过 {s['failed']} 条" if s["failed"] > 0 else ""
+        lines.append(f"- {p}：已验收 {s['done']}/{s['total']} 条{fail_text}")
 
-    if unclassified:
-        lines.append("⚪ 端字段无法自动判断，需人工确认归属：")
-        for desc, owner, platforms in unclassified:
-            lines.append(f"- {desc}（端=\"{'/'.join(platforms)}\"） @{owner}")
-            at_names_in_order.append(owner)
+    lines.append(f"【验收表遗留问题】（与本次发布相关，处理状态=待修复，共 {len(related_issues)} 个）")
+    if issue_type_count:
+        for issue_type, count in sorted(issue_type_count.items()):
+            lines.append(f"- {issue_type}：{count}个")
+    else:
+        lines.append("- 无")
 
     text = "\n".join(lines)
     send_to_beehive(text, at_names=at_names_in_order)
