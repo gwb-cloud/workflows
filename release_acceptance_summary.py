@@ -61,7 +61,8 @@ ISSUE_APP_TOKEN = "OR5ubORn3atfo3szLSTcbnVdnTf"
 ISSUE_TABLE_ID = "tbl3vBsukTCg1yrn"
 FIELD_ISSUE_TYPE = "问题定性"      # P0-P4
 FIELD_ISSUE_STATUS = "处理状态"
-FIELD_ISSUE_MODULE = "二级模块"    # ⚠️ 字段名待核对
+FIELD_ISSUE_MODULE = "二级模块"    # 已核对，字段名正确
+FIELD_ISSUE_RAISED_TIME = "问题提出时间"
 ISSUE_STATUS_PENDING = "待修复"
 
 # 目标发布日期：默认从分工表里自动找最近的即将到来的上线日期。手动触发测试时可以通过 workflow 输入指定日期，格式 2026-08-21
@@ -72,20 +73,25 @@ ALERT_WINDOW_WORKDAYS = 5
 
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
 
-# 产品owner姓名 → 蜂巢账号ID，需要你实际维护补全
+# 产品owner姓名（必须跟飞书里显示的名字完全一致，用来匹配数据）→ 蜂巢信息
+# 如果这个人在蜂巢里的显示名跟飞书不一样（花名/曾用名不同），nickname 填蜂巢那边真实显示的名字，
+# 不要瞎猜，@不生效大概率就是这里对不上
 PERSON_BEEHIVE_ID = {
-    "Webb": "ouv4qovzpupe9m",
-    "爱德": "ouv4qovznoxoxq",
-    "雨纯": "ouv4qovzoc6cad",
-    "苏宸": "ouvkmtuntg5xpk",
-    "大力": "ouv4qovzlarm8d",
-    "秦汉": "ouviua2rcuub5e",
-    "李静": "ouvcofw0bgs9hf",
-    "Rhys": "ouv4qovznsatvc",
-    "Crisley": "ouv4qow0vt3ksn", 
-    "Yvonne": "ouv4qovzmwpkuy",
-    "唐炜": "ouv4qovznbncqw",
-    "严光": "ouvgwgfyt1elue",
+    "Webb": {"id": "ouv4qovzpupe9m", "nickname": "Webb"},
+    "爱德": {"id": "ouv4qovznoxoxq", "nickname": "爱德"},
+    "雨纯": {"id": "ouv4qovzoc6cad", "nickname": "雨纯"},
+    "苏宸": {"id": "ouvkmtuntg5xpk", "nickname": "苏宸"},
+    "可大力": {"id": "ouv4qovzlarm8d", "nickname": "可大力"},
+    "陈杨": {"id": "ouviua2rcuub5e", "nickname": "秦汉"},  # 飞书叫陈杨，蜂巢显示名是秦汉
+    "李静": {"id": "ouvcofw0bgs9hf", "nickname": "李静"},
+    "Rhys": {"id": "ouv4qovznsatvc", "nickname": "Rhys"},
+    "Crisley": {"id": "ouv4qow0vt3ksn", "nickname": "Crisley"},
+    "Yvonne": {"id": "ouv4qovzmwpkuy", "nickname": "Yvonne"},
+    "唐炜": {"id": "ouv4qovznbncqw", "nickname": "唐炜"},
+    "严光": {"id": "ouvgwgfyt1elue", "nickname": "严光"},
+    # ⚠️ "陈杨"这个名字在真实消息里出现过（飞书产品owner字段读出来的），
+    # 但这次给的名单里没有他的ID，暂时留空，需要确认"秦汉"是不是就是陈杨、
+    # 或者陈杨需要单独补一条
 }
 
 # ========== 以下不用改 ==========
@@ -127,12 +133,12 @@ def send_to_beehive(text, at_names=None):
     at_ids = []
     at_users_info = []
     for name in (at_names or []):
-        beehive_id = PERSON_BEEHIVE_ID.get(name)
-        if beehive_id:
-            at_ids.append(beehive_id)
-            at_users_info.append({"atUserID": beehive_id, "groupNickname": name})
+        info = PERSON_BEEHIVE_ID.get(name)
+        if info and info.get("id"):
+            at_ids.append(info["id"])
+            at_users_info.append({"atUserID": info["id"], "groupNickname": info.get("nickname", name)})
         else:
-            print(f"⚠️ 未找到 {name} 对应的蜂巢账号ID，这处@可能不会生效，请检查 PERSON_BEEHIVE_ID 配置")
+            print(f"⚠️ 未找到 {name} 对应的蜂巢账号信息，这处@可能不会生效，请检查 PERSON_BEEHIVE_ID 配置")
 
     if at_ids:
         payload = {
@@ -173,7 +179,17 @@ def find_next_release_date(records, today):
     return min(candidate_dates)
 
 
-def workdays_between(start_date, end_date):
+def subtract_workdays(end_date, n):
+    """从 end_date 往前数 n 个工作日（含 end_date 本身），返回起始日期"""
+    d = end_date
+    counted = 0
+    while counted < n:
+        if d.weekday() < 5:
+            counted += 1
+        if counted == n:
+            break
+        d -= timedelta(days=1)
+    return d
     """计算 start_date 到 end_date（含首尾）之间有几个工作日（周一到周五）"""
     if end_date < start_date:
         return None
@@ -272,14 +288,18 @@ def compute_platform_stats(matched_fields_list):
     return stats
 
 
-def get_related_issues(token, feature_descriptions):
-    """从验收表里找处理状态=待修复、且二级模块能模糊匹配到本次发布需求的问题"""
+def get_related_issues(token, feature_descriptions, window_start, window_end):
+    """从验收表里找处理状态=待修复、二级模块能模糊匹配到本次发布需求、
+    且问题提出时间落在 [window_start, window_end] 窗口内的问题"""
     records = get_all_records(token, ISSUE_APP_TOKEN, ISSUE_TABLE_ID)
     matched = []
     for r in records:
         fields = r["fields"]
         status = get_select_value(fields, FIELD_ISSUE_STATUS)
         if status != ISSUE_STATUS_PENDING:
+            continue
+        raised_date = parse_date(fields.get(FIELD_ISSUE_RAISED_TIME))
+        if not raised_date or not (window_start <= raised_date.date() <= window_end):
             continue
         module = get_text_value(fields, FIELD_ISSUE_MODULE)
         if module and any(module in desc for desc in feature_descriptions):
@@ -360,7 +380,8 @@ def main():
     )
 
     # ===== 验收表遗留问题统计 =====
-    related_issues = get_related_issues(token, feature_descriptions)
+    window_start = subtract_workdays(target_date, ALERT_WINDOW_WORKDAYS)
+    related_issues = get_related_issues(token, feature_descriptions, window_start, target_date)
     issue_type_count = defaultdict(int)
     for fields in related_issues:
         issue_type = get_text_value(fields, FIELD_ISSUE_TYPE) or "未分类"
@@ -393,7 +414,7 @@ def main():
         fail_text = f"，其中不通过 {s['failed']} 条" if s["failed"] > 0 else ""
         lines.append(f"- {p}：已验收 {s['done']}/{s['total']} 条{fail_text}")
 
-    lines.append(f"【验收表遗留问题】（与本次发布相关，处理状态=待修复，共 {len(related_issues)} 个）")
+    lines.append(f"【验收表遗留问题】（{window_start}~{target_date}期间提出，与本次发布相关，处理状态=待修复，共 {len(related_issues)} 个）")
     if issue_type_count:
         for issue_type, count in sorted(issue_type_count.items()):
             lines.append(f"- {issue_type}：{count}个")

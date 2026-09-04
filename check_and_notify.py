@@ -31,7 +31,7 @@ WEBHOOK_MAP = {
 
 # 多维表格的 app_token 和 table_id，从表格 URL 里取：
 # https://xxx.feishu.cn/base/{app_token}?table={table_id}
-TABLE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned" 
+TABLE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
 TABLE_ID = "tblSDaRAkltfVtx6"
 
 # 字段名，必须和表格里的字段名完全一致
@@ -68,20 +68,19 @@ ITEM_OWNERS = {
 
 # 姓名 → 蜂巢账号ID，需要你实际去蜂巢后台/找同事拿到真实ID后填进来
 PERSON_BEEHIVE_ID = {
-    "Webb": "ouv4qovzpupe9m",
-    "爱德": "ouv4qovznoxoxq",
-    "雨纯": "ouv4qovzoc6cad",
-    "苏宸": "ouvkmtuntg5xpk",
-    "大力": "ouv4qovzlarm8d",
-    "秦汉": "ouviua2rcuub5e",
-    "李静": "ouvcofw0bgs9hf",
-    "Rhys": "ouv4qovznsatvc",
-    "Crisley": "ouv4qow0vt3ksn", 
-    "Yvonne": "ouv4qovzmwpkuy",
-    "唐炜": "ouv4qovznbncqw",
-    "严光": "ouvgwgfyt1elue",
+    "Webb": {"id": "ouv4qovzpupe9m", "nickname": "Webb"},
+    "爱德": {"id": "ouv4qovznoxoxq", "nickname": "爱德"},
+    "雨纯": {"id": "ouv4qovzoc6cad", "nickname": "雨纯"},
+    "苏宸": {"id": "ouvkmtuntg5xpk", "nickname": "苏宸"},
+    "可大力": {"id": "ouv4qovzlarm8d", "nickname": "可大力"},
+    "陈杨": {"id": "ouviua2rcuub5e", "nickname": "秦汉"},  # 飞书叫陈杨，蜂巢显示名是秦汉
+    "李静": {"id": "ouvcofw0bgs9hf", "nickname": "李静"},
+    "Rhys": {"id": "ouv4qovznsatvc", "nickname": "Rhys"},
+    "Crisley": {"id": "ouv4qow0vt3ksn", "nickname": "Crisley"},
+    "Yvonne": {"id": "ouv4qovzmwpkuy", "nickname": "Yvonne"},
+    "唐炜": {"id": "ouv4qovznbncqw", "nickname": "唐炜"},
+    "严光": {"id": "ouvgwgfyt1elue", "nickname": "严光"},
 }
-
 
 FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
 
@@ -138,12 +137,12 @@ def send_to_beehive(text, target=DEFAULT_TARGET, at_names=None):
     at_ids = []
     at_users_info = []
     for name in (at_names or []):
-        beehive_id = PERSON_BEEHIVE_ID.get(name)
-        if beehive_id:
-            at_ids.append(beehive_id)
-            at_users_info.append({"atUserID": beehive_id, "groupNickname": name})
+        info = PERSON_BEEHIVE_ID.get(name)
+        if info and info.get("id"):
+            at_ids.append(info["id"])
+            at_users_info.append({"atUserID": info["id"], "groupNickname": info.get("nickname", name)})
         else:
-            print(f"⚠️ 未找到 {name} 对应的蜂巢账号ID，这处@可能不会生效，请检查 PERSON_BEEHIVE_ID 配置")
+            print(f"⚠️ 未找到 {name} 对应的蜂巢账号信息，这处@可能不会生效，请检查 PERSON_BEEHIVE_ID 配置")
 
     if at_ids:
         payload = {
