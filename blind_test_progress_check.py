@@ -46,9 +46,6 @@ FIELD_TAG = "本次抽检版本号"
 
 RESULT_DONE_VALUES = {"通过", "不通过"}
 
-# 快到月底（还剩这么多天以内）时，覆盖不足会额外加重提醒语气
-MONTH_END_ALERT_DAYS = 5
-
 
 def get_tenant_token():
     resp = requests.post(
@@ -174,10 +171,15 @@ def main():
     records = get_all_records(token, BLIND_TEST_APP_TOKEN, table_id)
     total = len(records)
 
-    # ===== 检查一：整体覆盖进度（Mac/iPhone分开统计 + 每日增量）=====
+    # ===== 时间进度基准线：今天是本月第几天 / 本月共几天 =====
+    last_day = calendar.monthrange(now.year, now.month)[1]
+    elapsed_days = now.day
+    expected_pct = elapsed_days / last_day * 100
+
+    # ===== 按人、按端统计完成情况 =====
     mac_done_count = 0
     iphone_done_count = 0
-    owner_pending = defaultdict(int)
+    owner_done = defaultdict(int)   # 两端都完成才算这个人的一条
     owner_total = defaultdict(int)
 
     for r in records:
@@ -190,45 +192,57 @@ def main():
             mac_done_count += 1
         if iphone_done:
             iphone_done_count += 1
-        if not (mac_done and iphone_done):
-            owner_pending[owner] += 1
+        if mac_done and iphone_done:
+            owner_done[owner] += 1
 
     issue_count = sum(1 for r in records if is_case_done(r["fields"]) and has_issue(r["fields"]))
 
-    # 读取上次快照，算今天两端各新增完成了多少
+    # 每日快照，用于"今日新增"这个辅助信息（整体 + 按人）
     today_str = now.strftime("%Y-%m-%d")
     state = load_state()
     prev = state.get(table_name)
-
     mac_delta = mac_done_count - prev["mac_done"] if prev else None
     iphone_delta = iphone_done_count - prev["iphone_done"] if prev else None
+    prev_owner_done = prev.get("owner_done", {}) if prev else {}
 
-    state[table_name] = {"date": today_str, "mac_done": mac_done_count, "iphone_done": iphone_done_count}
+    state[table_name] = {
+        "date": today_str,
+        "mac_done": mac_done_count,
+        "iphone_done": iphone_done_count,
+        "owner_done": dict(owner_done),
+    }
     save_state(state)
 
-    last_day = calendar.monthrange(now.year, now.month)[1]
-    days_left = last_day - now.day
-    is_urgent = days_left <= MONTH_END_ALERT_DAYS
+    lines = [f"📋 {table_name} 进度检查（本月第 {elapsed_days}/{last_day} 天，预期进度 {expected_pct:.1f}%）"]
 
-    def platform_line(name, done, delta):
-        remaining = total - done
-        delta_text = f"，今日新增 {delta}" if delta is not None else "（首次统计，暂无增量）"
-        return f"- {name}：已完成 {done}/{total}{delta_text}，剩余 {remaining}"
+    lines.append("【整体进度】")
+    for name, done in [("Mac", mac_done_count), ("iPhone", iphone_done_count)]:
+        actual_pct = done / total * 100 if total else 0
+        delta = mac_delta if name == "Mac" else iphone_delta
+        delta_text = f"，今日新增{delta}" if delta is not None else ""
+        flag = f" 🚨落后预期{expected_pct - actual_pct:.1f}pt" if actual_pct < expected_pct else " ✅达标"
+        lines.append(f"- {name}：完成 {done}/{total}（{actual_pct:.1f}%{delta_text}）{flag}")
 
-    lines = [
-        f"📋 {table_name} 覆盖进度（本月还剩 {days_left} 天）：",
-        platform_line("Mac", mac_done_count, mac_delta),
-        platform_line("iPhone", iphone_done_count, iphone_delta),
-        f"🐞 已验证中发现问题：{issue_count} 条",
-    ]
+    lines.append(f"🐞 已验证中发现问题：{issue_count} 条")
 
-    pending_owners = sorted(owner_pending.items(), key=lambda x: x[1], reverse=True)
-    if pending_owners:
-        prefix = "🚨 月底临近，以下人员未完成较多：" if is_urgent else "🟡 未完成情况："
-        lines.append(prefix)
-        for owner, pending in pending_owners:
-            if pending > 0:
-                lines.append(f"- {owner}：还剩 {pending}/{owner_total[owner]} 条")
+    # ===== 未达标人员：完成度低于预期时间进度的人 =====
+    behind_owners = []
+    for owner, assigned in owner_total.items():
+        done = owner_done.get(owner, 0)
+        actual_pct = done / assigned * 100 if assigned else 0
+        if actual_pct < expected_pct:
+            behind_owners.append((owner, done, assigned, actual_pct))
+
+    if behind_owners:
+        behind_owners.sort(key=lambda x: x[3])  # 完成度最低的排前面
+        lines.append(f"🚨 完成度低于预期进度（{expected_pct:.1f}%）的人员：")
+        for owner, done, assigned, actual_pct in behind_owners:
+            remaining = assigned - done
+            prev_done = prev_owner_done.get(owner)
+            delta_text = f"{done - prev_done}个" if prev_done is not None else "0个（首次统计）"
+            lines.append(f"- {owner}：今日完成 {delta_text}，剩余 {remaining}/{assigned}，进度{actual_pct:.0f}%")
+    else:
+        lines.append("✅ 所有人完成度均达到预期进度")
 
     # ===== 检查二：各发布日期抽检完成度（兼容文本/多选两种字段类型）=====
     tag_records = defaultdict(list)
