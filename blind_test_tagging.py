@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+、# -*- coding: utf-8 -*-
 """
 发版抽检打标脚本
 每天检查分工表里"上线日期=今天"的需求，用"二级模块"关键词匹配当月验收表里的用例，
@@ -187,14 +187,43 @@ def is_case_done(fields):
     return iphone in {"通过", "不通过"} and mac in {"通过", "不通过"}
 
 
+def find_next_release_date(records, today):
+    """从分工表里找最近的即将到来的上线日期（今天或之后，允许1天宽限），
+    不假设固定周期，跟"发布验收总览"脚本用同一套逻辑，保证两边算出来的是同一个发布日期。"""
+    candidate_dates = set()
+    for r in records:
+        fields = r.get("fields", {})
+        platform_value = get_select_value(fields, FIELD_PLATFORM)
+        if platform_value in SKIP_PLATFORM_VALUES:
+            continue
+        online_date = parse_date(fields.get(FIELD_ONLINE_DATE))
+        if not online_date:
+            continue
+        d = online_date.date()
+        if d >= today - timedelta(days=1):
+            candidate_dates.add(d)
+    if not candidate_dates:
+        return None
+    return min(candidate_dates)
+
+
 def main():
     token = get_tenant_token()
     now = datetime.now(BEIJING_TZ)
 
+    # 先拿分工表全部数据，才能算出"实际发布日期"，不能直接用运行当天，
+    # 否则连续巡检5天会打出5个不同的日期标签，同一次发布被拆成好几份
+    release_records = get_all_records(token, RELEASE_APP_TOKEN, RELEASE_TABLE_ID)
+
     if TARGET_DATE_STR:
         target_date = datetime.strptime(TARGET_DATE_STR, "%Y-%m-%d").date()
+        print(f"手动指定目标日期: {target_date}")
     else:
-        target_date = now.date()
+        target_date = find_next_release_date(release_records, now.date())
+        if target_date is None:
+            print("分工表里没有找到任何即将到来的上线日期，跳过")
+            return
+        print(f"自动算出的目标发布日期: {target_date}")
 
     target_table_name = f"M{now.month}验收表"
     blind_table_id = find_table_by_name(token, BLIND_TEST_APP_TOKEN, target_table_name)
@@ -202,7 +231,6 @@ def main():
         raise RuntimeError(f"没找到 {target_table_name}，请确认本月验收表已经建好")
 
     # 拿这次要上线的需求
-    release_records = get_all_records(token, RELEASE_APP_TOKEN, RELEASE_TABLE_ID)
     features = []
     for r in release_records:
         fields = r["fields"]

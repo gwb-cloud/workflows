@@ -12,11 +12,26 @@
 
 import requests
 import os
+import json
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 import calendar
 
 BEIJING_TZ = timezone(timedelta(hours=8))
+
+STATE_FILE = "blind_test_state.json"
+
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
 
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID_CLI"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET_CLI"]
@@ -131,6 +146,13 @@ def is_case_done(fields):
     return iphone in RESULT_DONE_VALUES and mac in RESULT_DONE_VALUES
 
 
+def has_issue(fields):
+    """任意一端结果是"不通过"，就算这条用例发现了问题"""
+    iphone = get_select_value(fields, FIELD_IPHONE_RESULT)
+    mac = get_select_value(fields, FIELD_MAC_RESULT)
+    return iphone == "不通过" or mac == "不通过"
+
+
 def send_to_beehive(text):
     resp = requests.post(
         BEEHIVE_WEBHOOK,
@@ -152,8 +174,9 @@ def main():
     records = get_all_records(token, BLIND_TEST_APP_TOKEN, table_id)
     total = len(records)
 
-    # ===== 检查一：整体覆盖进度 =====
-    done_count = 0
+    # ===== 检查一：整体覆盖进度（Mac/iPhone分开统计 + 每日增量）=====
+    mac_done_count = 0
+    iphone_done_count = 0
     owner_pending = defaultdict(int)
     owner_total = defaultdict(int)
 
@@ -161,16 +184,43 @@ def main():
         fields = r["fields"]
         owner = get_person_name(fields, FIELD_OWNER)
         owner_total[owner] += 1
-        if is_case_done(fields):
-            done_count += 1
-        else:
+        mac_done = get_select_value(fields, FIELD_MAC_RESULT) in RESULT_DONE_VALUES
+        iphone_done = get_select_value(fields, FIELD_IPHONE_RESULT) in RESULT_DONE_VALUES
+        if mac_done:
+            mac_done_count += 1
+        if iphone_done:
+            iphone_done_count += 1
+        if not (mac_done and iphone_done):
             owner_pending[owner] += 1
+
+    issue_count = sum(1 for r in records if is_case_done(r["fields"]) and has_issue(r["fields"]))
+
+    # 读取上次快照，算今天两端各新增完成了多少
+    today_str = now.strftime("%Y-%m-%d")
+    state = load_state()
+    prev = state.get(table_name)
+
+    mac_delta = mac_done_count - prev["mac_done"] if prev else None
+    iphone_delta = iphone_done_count - prev["iphone_done"] if prev else None
+
+    state[table_name] = {"date": today_str, "mac_done": mac_done_count, "iphone_done": iphone_done_count}
+    save_state(state)
 
     last_day = calendar.monthrange(now.year, now.month)[1]
     days_left = last_day - now.day
     is_urgent = days_left <= MONTH_END_ALERT_DAYS
 
-    lines = [f"📋 {table_name} 覆盖进度：{done_count}/{total}（本月还剩 {days_left} 天）"]
+    def platform_line(name, done, delta):
+        remaining = total - done
+        delta_text = f"，今日新增 {delta}" if delta is not None else "（首次统计，暂无增量）"
+        return f"- {name}：已完成 {done}/{total}{delta_text}，剩余 {remaining}"
+
+    lines = [
+        f"📋 {table_name} 覆盖进度（本月还剩 {days_left} 天）：",
+        platform_line("Mac", mac_done_count, mac_delta),
+        platform_line("iPhone", iphone_done_count, iphone_delta),
+        f"🐞 已验证中发现问题：{issue_count} 条",
+    ]
 
     pending_owners = sorted(owner_pending.items(), key=lambda x: x[1], reverse=True)
     if pending_owners:
@@ -195,10 +245,11 @@ def main():
                 tag_records[tag].append(fields)
 
     if tag_records:
-        lines.append("📦 各发布日期抽检完成度：")
+        lines.append("📦 各发布日期抽检完成度（完成数/总数，括号内为发现问题数）：")
         for tag, fields_list in sorted(tag_records.items()):
             done = sum(1 for f in fields_list if is_case_done(f))
-            lines.append(f"- {tag}：{done}/{len(fields_list)}")
+            tag_issues = sum(1 for f in fields_list if is_case_done(f) and has_issue(f))
+            lines.append(f"- {tag}：{done}/{len(fields_list)}（发现问题 {tag_issues} 条）")
 
     text = "\n".join(lines)
     send_to_beehive(text)
