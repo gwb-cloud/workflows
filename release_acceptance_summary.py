@@ -190,6 +190,9 @@ def subtract_workdays(end_date, n):
             break
         d -= timedelta(days=1)
     return d
+
+
+def workdays_between(start_date, end_date):
     """计算 start_date 到 end_date（含首尾）之间有几个工作日（周一到周五）"""
     if end_date < start_date:
         return None
