@@ -51,7 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 脚本 | 触发时间（北京） | 作用 | 飞书应用 | 发消息用的 Secret |
 |---|---|---|---|---|
 | `check_and_notify.py` | 每天10点 | 见项目1 | 只读 | `BEEHIVE_WEBHOOK_YANSHOU` + `BEEHIVE_WEBHOOK_P1_NODE` |
-| `release_acceptance_summary.py` | 每天10点、18点 | 按上文规则确定下一次发布及其需求，距发布 ≤5 个工作日才发；标题带版本号；按人/按端统计；验收表中窗口期内提出、二级模块模糊匹配、状态=待修复的遗留问题按 P0-P4 计数 | 只读 | `BEEHIVE_WEBHOOK_P2_WORKFLOW` |
+| `release_acceptance_summary.py` | 每天10点、18点 | 按上文规则确定下一次发布及其需求，距发布 ≤5 个工作日才发；标题带版本号；按分工表「状态」字段判断通过/待验收，按人/按端统计；验收表中窗口期内提出、二级模块模糊匹配、状态=待修复的遗留问题按 P0-P4 计数 | 只读 | `BEEHIVE_WEBHOOK_P2_WORKFLOW` |
 | `weekly_redblack.py` | 每周一9点 | 本月红黑榜按人汇总 | 只读 | `BEEHIVE_WEBHOOK_P3_REDBLACK` |
 | `monthly_blind_test_setup.py` | 每月1日9点 | 找/建 `M{n}人员` 列（上月顺序循环左移一位）→ 找/建 `M{n}验收表`（二级模块选项从用例库快照）→ 全量用例轮流分配验收人 | CLI 高权限 | 不发消息 |
 | `blind_test_tagging.py` | 每天11点 | 按上文规则确定下一次发布及其需求，二级模块关键词匹配需求描述，在多选字段"本次抽检版本号"写入**版本号**（选项不存在会先自动添加）。每个版本的抽检总量 = 已打标 + 关键词命中，不足 200 条才从未完成用例里随机补齐到 200，重复运行不会继续增长 | CLI 高权限 | 不发消息 |
@@ -93,9 +93,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. **日期字段偏 1 小时**：飞书"纯日期"字段的毫秒时间戳按 UTC+8 换算后时钟固定停在 23:00。所有 `parse_date()` 都在换算后再 `+ timedelta(hours=1)`，这是实测规律，不要"修正"成标准时区换算。
 2. **GitHub Actions 跑在 UTC**：所有"今天"必须用 `datetime.now(BEIJING_TZ)`，`BEIJING_TZ = timezone(timedelta(hours=8))`。cron 表达式也是 UTC（北京时间 −8 小时）。
 3. **YAML 缩进**：`env:` 必须与 `run:` 同级，缩进错会报一连串 "Unrecognized named-value"。
-4. **"端"字段取值要核对**：`release_acceptance_summary.py` 的 `PLATFORM_VALUE_MAP` 用的合并选项是 `"Mac/iPhone"`。如果表里实际选项文字不同（例如 `Mac,iPhone`），这类需求会被判为"无法判断"→ 计入待验收、且不进按端统计，不报错。"其他"代表调研/线下方案，统计时一律过滤。
-5. **`monthly_blind_test_setup.py` 不是幂等的**：当月表已存在时会复用，但第三步**仍会把全部用例再插入一遍**——同一个月重复手动运行会让验收表记录翻倍。
-6. **表名/列名不含年份**：`M{月份}验收表`、`M{月份}人员` 只按月份命名，跨年后会命中去年同月的旧表/旧列。
+4. **"端"字段取值要核对**：`release_acceptance_summary.py` 的 `PLATFORM_VALUE_MAP` 用的合并选项是 `"Mac/iPhone"`。如果表里实际选项文字不同（例如 `Mac,iPhone`），这类需求不会出现在按端统计里，不报错。"其他"代表调研/线下方案，统计时一律过滤。
+5. **状态选项文字必须逐字一致**：`PASS_STATUS_VALUES` / `SKIP_STATUS_VALUES` 里是全角括号（如"验收通过（等发版）"）。分工表改了选项名称而代码没同步时，该需求会静默落入"待验收"并 @ owner。
+6. **`monthly_blind_test_setup.py` 不是幂等的**：当月表已存在时会复用，但第三步**仍会把全部用例再插入一遍**——同一个月重复手动运行会让验收表记录翻倍。
+7. **表名/列名不含年份**：`M{月份}验收表`、`M{月份}人员` 只按月份命名，跨年后会命中去年同月的旧表/旧列。
 
 ## 状态持久化
 
@@ -111,7 +112,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 表 | app_token | table_id | 关键字段 |
 |---|---|---|---|
 | 节点更新总表（发布日期数据源） | `IC7ObBQ2ya2H4FsqT3ocPreYned` | `tblSDaRAkltfVtx6` | 版本号/版本发布日期/验收无P0问题（兼容单选"是"或复选框）/ForBud-Mac\|iPhone\|后台已更新/盲测用例已录入/帮助文档已更新/多语言走查（已定义但未参与检查） |
-| 分工表（产品部项目管理） | `VhZebH05uaUlEyscWfWc2mMvnhc` | `tbl1Gwx4r7oOcV8g` | 项目说明/产品owner/上线日期/端（单选）/Mac验收结果/iPhone验收结果/后台验收结果（通过/不通过/无需验收） |
+| 分工表（产品部项目管理） | `VhZebH05uaUlEyscWfWc2mMvnhc` | `tbl1Gwx4r7oOcV8g` | 项目说明/产品owner/上线日期/端（单选）/状态（单选：验收通过（等发版）、已上线Zelto（未对客）、已上线（对客）算通过；任务完成（无需开发）、暂时hold、长期任务不统计；其余如未开始~验收中算待验收）。Mac/iPhone/后台验收结果字段已不再维护，不要再读 |
 | 团队行为记录表（红黑榜） | `G2gsbrQTVaN6XXsNiEkcklvinAh` | `tblQyXjW8i85vfxT` | 类型（红榜/黑榜）/责任人/发生时间 |
 | 盲测原始目标表（用例库） | `FnFab3FDKa0JU6sqa19cDVpHnM7` | `tbl46z8GYP5HN1MJ` | 目标/二级模块（单选） |
 | 人员名单（轮换表） | `FnFab3FDKa0JU6sqa19cDVpHnM7` | `tblbuVpl9xK3E0Rc` | `M{n}人员` 人员字段列，每月循环左移一位 |

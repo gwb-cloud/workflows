@@ -7,8 +7,11 @@
 这样发布改期后，分工表的上线日期不用跟着逐条改。
 
 统计口径：
-1. 按人维度：每个产品owner这次分到几个需求，通过/待验收/不通过 分别几个
-2. 按端维度：Mac验收了多少条、iPhone验收了多少条，其中各自多少条不通过（发现问题数）
+验收是否通过只看分工表的「状态」字段（同事不再维护 Mac/iPhone/后台验收结果 三个字段）：
+PASS_STATUS_VALUES 算通过，SKIP_STATUS_VALUES 不纳入统计，其余状态（含空）都算待验收。
+
+1. 按人维度：每个产品owner这次分到几个需求，通过/待验收 分别几个
+2. 按端维度：按"端"字段拆分，每个端有多少条需求、其中多少条已通过
 3. 验收表遗留问题：用"二级模块"关键词模糊匹配本次发布相关的需求，统计验收表里
    处理状态=待修复 的问题数量，按"问题定性"（P0-P4）分类
 
@@ -45,11 +48,15 @@ FIELD_PRODUCT_OWNER = "产品owner"
 FIELD_ONLINE_DATE = "上线日期"
 FIELD_PLATFORM = "端"                    # 单选：Mac / iPhone / Mac/iPhone / 后台 / 其他
 
-PLATFORM_RESULT_FIELDS = {
-    "Mac": "Mac验收结果",
-    "iPhone": "iPhone验收结果",
-    "后台": "后台验收结果",
-}
+FIELD_STATUS = "状态"                   # 单选，完整选项见 PASS/SKIP 两个集合及注释
+
+# 算"通过"的状态
+PASS_STATUS_VALUES = {"验收通过（等发版）", "已上线Zelto（未对客）", "已上线（对客）"}
+# 不纳入本次发布统计的状态（不算通过也不算待验收，不 @ 人）
+SKIP_STATUS_VALUES = {"任务完成（无需开发）", "暂时hold", "长期任务"}
+# 其余状态都算"待验收"：未开始 / 方案设计中 / 方案待评审 / 评审通过待澄清 / 已澄清待开发 / 开发中 / 验收中 / 空
+
+PLATFORMS = ["Mac", "iPhone", "后台"]
 PLATFORM_VALUE_MAP = {
     "Mac": ["Mac"],
     "iPhone": ["iPhone"],
@@ -57,10 +64,6 @@ PLATFORM_VALUE_MAP = {
     "后台": ["后台"],
 }
 SKIP_PLATFORM_VALUES = {"其他"}
-
-RESULT_PASS = "通过"
-RESULT_FAIL = "不通过"
-RESULT_SKIP = "无需验收"
 
 # 验收表（问题记录），用于统计"本次发布相关，还有多少待修复问题"
 ISSUE_APP_TOKEN = "OR5ubORn3atfo3szLSTcbnVdnTf"
@@ -258,53 +261,24 @@ def get_text_value(fields, field_name):
 
 
 def evaluate_acceptance(fields):
-    """返回 (总体状态, 涉及的端列表)
-    总体状态: '通过' / '不通过' / '未完成' / '无需验收' / '无法判断'"""
-    platform_value = get_select_value(fields, FIELD_PLATFORM)
-    if not platform_value:
-        return "未知", []
-
-    actual_platforms = PLATFORM_VALUE_MAP.get(platform_value)
-    if not actual_platforms:
-        return "无法判断", [platform_value]
-
-    statuses = {}
-    for p in actual_platforms:
-        field_name = PLATFORM_RESULT_FIELDS.get(p)
-        if field_name:
-            statuses[p] = get_select_value(fields, field_name)
-
-    relevant = {p: s for p, s in statuses.items() if s != RESULT_SKIP}
-    if not relevant:
-        return "无需验收", list(statuses.keys())
-
-    failed = [p for p, s in relevant.items() if s == RESULT_FAIL]
-    if failed:
-        return "不通过", failed
-
-    pending = [p for p, s in relevant.items() if s != RESULT_PASS]
-    if pending:
-        return "未完成", pending
-
-    return "通过", []
+    """根据「状态」字段返回 '通过' / '待验收' / '不统计'"""
+    status = get_select_value(fields, FIELD_STATUS)
+    if status in PASS_STATUS_VALUES:
+        return "通过"
+    if status in SKIP_STATUS_VALUES:
+        return "不统计"
+    return "待验收"
 
 
 def compute_platform_stats(matched_fields_list):
-    """按端统计：这个端总共需要验多少条、已经验了多少条、其中不通过多少条"""
-    stats = {p: {"total": 0, "done": 0, "failed": 0} for p in PLATFORM_RESULT_FIELDS}
+    """按端统计：这个端总共有多少条需求、其中多少条已通过（Mac/iPhone 合并选项两端各算一条）"""
+    stats = {p: {"total": 0, "done": 0} for p in PLATFORMS}
     for fields in matched_fields_list:
         platform_value = get_select_value(fields, FIELD_PLATFORM)
-        actual_platforms = PLATFORM_VALUE_MAP.get(platform_value, [])
-        for p in actual_platforms:
-            field_name = PLATFORM_RESULT_FIELDS.get(p)
-            if not field_name:
-                continue
-            result = get_select_value(fields, field_name)
+        for p in PLATFORM_VALUE_MAP.get(platform_value, []):
             stats[p]["total"] += 1
-            if result in (RESULT_PASS, RESULT_FAIL):
+            if evaluate_acceptance(fields) == "通过":
                 stats[p]["done"] += 1
-            if result == RESULT_FAIL:
-                stats[p]["failed"] += 1
     return stats
 
 
@@ -365,7 +339,8 @@ def main():
         if DEBUG:
             desc = fields.get(FIELD_PROJECT_DESC, "未命名需求")
             parsed_str = online_date.strftime("%Y-%m-%d %H:%M:%S %Z") if online_date else "解析失败/为空"
-            print(f"[DEBUG] {desc} | 上线日期原始值: {raw_online_date} | 解析结果: {parsed_str}")
+            status = get_select_value(fields, FIELD_STATUS) or "空"
+            print(f"[DEBUG] {desc} | 上线日期原始值: {raw_online_date} | 解析结果: {parsed_str} | 状态: {status}")
 
         if not online_date or not belongs_to_release(online_date.date(), prev_release_date, target_date):
             continue
@@ -379,32 +354,25 @@ def main():
         return
 
     # ===== 按人统计 =====
-    owner_stats = defaultdict(lambda: {"通过": 0, "待验收": 0, "不通过": 0})
+    owner_stats = defaultdict(lambda: {"通过": 0, "待验收": 0})
     feature_descriptions = []
+    counted = []
 
     for fields in matched:
-        status, _ = evaluate_acceptance(fields)
-        if status == "无需验收":
+        status = evaluate_acceptance(fields)
+        if status == "不统计":
             continue
+        counted.append(fields)
         owner = get_person_name(fields, FIELD_PRODUCT_OWNER)
-        desc = fields.get(FIELD_PROJECT_DESC, "未命名需求")
-        feature_descriptions.append(desc)
-
-        if status == "通过":
-            owner_stats[owner]["通过"] += 1
-        elif status == "不通过":
-            owner_stats[owner]["不通过"] += 1
-        else:  # 未完成 / 无法判断，统一归入待验收
-            owner_stats[owner]["待验收"] += 1
+        feature_descriptions.append(fields.get(FIELD_PROJECT_DESC, "未命名需求"))
+        owner_stats[owner][status] += 1
 
     if not owner_stats:
-        print(f"{target_date} 匹配到的需求全部标记为无需验收，跳过发送")
+        print(f"{target_date} 匹配到的需求状态全部是 {'/'.join(sorted(SKIP_STATUS_VALUES))}，跳过发送")
         return
 
     # ===== 按端统计 =====
-    platform_stats = compute_platform_stats(
-        [f for f in matched if evaluate_acceptance(f)[0] != "无需验收"]
-    )
+    platform_stats = compute_platform_stats(counted)
 
     # ===== 验收表遗留问题统计 =====
     window_start = subtract_workdays(target_date, ALERT_WINDOW_WORKDAYS)
@@ -425,21 +393,18 @@ def main():
         detail = f"通过{s['通过']}个"
         if s["待验收"] > 0:
             detail += f"，待验收{s['待验收']}个"
-        if s["不通过"] > 0:
-            detail += f"，不通过{s['不通过']}个"
         line = f"- {owner}：共{owner_total}个需求，{detail}"
-        if s["待验收"] > 0 or s["不通过"] > 0:
+        if s["待验收"] > 0:
             line += f" @{owner}"
             at_names_in_order.append(owner)
         lines.append(line)
 
     lines.append("【验收进度（按端）】")
-    for p in ["Mac", "iPhone", "后台"]:
-        s = platform_stats.get(p, {"total": 0, "done": 0, "failed": 0})
+    for p in PLATFORMS:
+        s = platform_stats[p]
         if s["total"] == 0:
             continue
-        fail_text = f"，其中不通过 {s['failed']} 条" if s["failed"] > 0 else ""
-        lines.append(f"- {p}：已验收 {s['done']}/{s['total']} 条{fail_text}")
+        lines.append(f"- {p}：已验收通过 {s['done']}/{s['total']} 条")
 
     lines.append(f"【验收表遗留问题】（{window_start}~{target_date}期间提出，与本次发布相关，处理状态=待修复，共 {len(related_issues)} 个）")
     if issue_type_count:
