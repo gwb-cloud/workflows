@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-本次发布验收总览脚本（v2）
-固定周五发布：每天自动算出"本周五"作为目标发布日期，从周一到周五每天都检查同一批需求，
-提前5个工作日开始提醒，而不是只在发布当天检查一次。
+本次发布验收总览脚本（v3）
+发布日期以"节点更新总表"里维护的「版本发布日期」为准（随时可能改期，脚本每次运行都重新读取）。
+下一次发布 = 节点更新总表里最近的、今天或之后的发布日期；距发布≤5个工作日开始每天提醒。
+本次发布包含的需求 = 分工表里 上线日期 落在（上一次发布日期, 本次发布日期] 区间内的需求，
+这样发布改期后，分工表的上线日期不用跟着逐条改。
 
 统计口径：
 1. 按人维度：每个产品owner这次分到几个需求，通过/待验收/不通过 分别几个
@@ -15,8 +17,6 @@
 - FEISHU_APP_SECRET
 - BEEHIVE_WEBHOOK_P2_WORKFLOW
 
-⚠️ 验收表的"二级模块"字段名是按你们其他表的命名习惯猜的，务必去表格里核对一次，
-   不一致的话模糊匹配会全部落空（不会报错，只是匹配不到）。
 """
 
 import requests
@@ -29,6 +29,12 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET"]
 BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_P2_WORKFLOW"]
+
+# 节点更新总表：发布日期的唯一数据源
+NODE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
+NODE_TABLE_ID = "tblSDaRAkltfVtx6"
+FIELD_NODE_VERSION = "版本号"
+FIELD_NODE_RELEASE_DATE = "版本发布日期"
 
 # 分工表（产品部项目管理）
 RELEASE_APP_TOKEN = "VhZebH05uaUlEyscWfWc2mMvnhc"
@@ -65,7 +71,7 @@ FIELD_ISSUE_MODULE = "二级模块"    # 已核对，字段名正确
 FIELD_ISSUE_RAISED_TIME = "问题提出时间"
 ISSUE_STATUS_PENDING = "待修复"
 
-# 目标发布日期：默认从分工表里自动找最近的即将到来的上线日期。手动触发测试时可以通过 workflow 输入指定日期，格式 2026-08-21
+# 目标发布日期：默认从节点更新总表里自动找最近的即将到来的发布日期。手动触发测试时可以通过 workflow 输入指定日期，格式 2026-08-21
 TARGET_DATE_STR = os.environ.get("TARGET_RELEASE_DATE", "")
 
 # 提前多少个工作日开始提醒（含发布当天本身）
@@ -89,9 +95,6 @@ PERSON_BEEHIVE_ID = {
     "Yvonne": {"id": "ouv4qovzmwpkuy", "nickname": "Yvonne"},
     "唐炜": {"id": "ouv4qovznbncqw", "nickname": "唐炜"},
     "严光": {"id": "ouvgwgfyt1elue", "nickname": "严光"},
-    # ⚠️ "陈杨"这个名字在真实消息里出现过（飞书产品owner字段读出来的），
-    # 但这次给的名单里没有他的ID，暂时留空，需要确认"秦汉"是不是就是陈杨、
-    # 或者陈杨需要单独补一条
 }
 
 # ========== 以下不用改 ==========
@@ -159,24 +162,38 @@ def parse_date(ms_timestamp):
     return datetime.fromtimestamp(ms_timestamp / 1000, tz=BEIJING_TZ) + timedelta(hours=1)
 
 
-def find_next_release_date(records, today):
-    """从分工表里找最近的即将到来的上线日期（今天或之后，允许1天宽限兼容日期刚过还没更新的过渡态），
-    作为下一次要监控的发布目标。取所有候选里最近的一个，不假设固定在周几。"""
-    candidate_dates = set()
-    for r in records:
+def get_releases(token):
+    """读节点更新总表，返回 {发布日期: [版本号, ...]}，没填发布日期的行跳过"""
+    releases = defaultdict(list)
+    for r in get_all_records(token, NODE_APP_TOKEN, NODE_TABLE_ID):
         fields = r.get("fields", {})
-        platform_value = get_select_value(fields, FIELD_PLATFORM)
-        if platform_value in SKIP_PLATFORM_VALUES:
+        release_date = parse_date(fields.get(FIELD_NODE_RELEASE_DATE))
+        if not release_date:
             continue
-        online_date = parse_date(fields.get(FIELD_ONLINE_DATE))
-        if not online_date:
-            continue
-        d = online_date.date()
-        if d >= today - timedelta(days=1):
-            candidate_dates.add(d)
-    if not candidate_dates:
-        return None
-    return min(candidate_dates)
+        version = fields.get(FIELD_NODE_VERSION)
+        version = str(version) if isinstance(version, (int, float)) else get_text_value(fields, FIELD_NODE_VERSION)
+        releases[release_date.date()].append(version or "未填版本号")
+    return releases
+
+
+def find_next_release_date(releases, today):
+    """节点更新总表里最近的即将到来的发布日期（今天或之后，允许1天宽限兼容发布日刚过的过渡态）。
+    跟 blind_test_tagging.py 里的同名函数保持一致，保证两边算出来的是同一次发布。"""
+    candidates = [d for d in releases if d >= today - timedelta(days=1)]
+    return min(candidates) if candidates else None
+
+
+def find_previous_release_date(releases, target_date):
+    earlier = [d for d in releases if d < target_date]
+    return max(earlier) if earlier else None
+
+
+def belongs_to_release(online_date, prev_release_date, target_date):
+    """需求上线日期落在（上一次发布, 本次发布] 区间内就算本次发布的需求；
+    节点更新总表里没有更早的发布记录时，退化成上线日期=本次发布日期"""
+    if prev_release_date is None:
+        return online_date == target_date
+    return prev_release_date < online_date <= target_date
 
 
 def subtract_workdays(end_date, n):
@@ -315,6 +332,9 @@ def main():
     now = datetime.now(BEIJING_TZ)
     today = now.date()
 
+    releases = get_releases(token)
+    print(f"节点更新总表共读取到 {len(releases)} 个发布日期")
+
     records = get_all_records(token, RELEASE_APP_TOKEN, RELEASE_TABLE_ID)
     print(f"分工表共读取到 {len(records)} 条记录")
 
@@ -322,15 +342,19 @@ def main():
         target_date = datetime.strptime(TARGET_DATE_STR, "%Y-%m-%d").date()
         print(f"手动指定目标日期: {target_date}")
     else:
-        target_date = find_next_release_date(records, today)
+        target_date = find_next_release_date(releases, today)
         if target_date is None:
-            print("分工表里没有找到任何即将到来的上线日期，跳过")
+            print("节点更新总表里没有找到任何即将到来的发布日期，跳过")
             return
         wd = workdays_between(today, target_date)
         print(f"下一次发布：{target_date}（距今 {wd} 个工作日）")
         if wd is None or wd > ALERT_WINDOW_WORKDAYS:
             print(f"还没进入提前{ALERT_WINDOW_WORKDAYS}个工作日的提醒窗口，跳过")
             return
+
+    version_text = "/".join(releases.get(target_date, [])) or "节点更新总表中无此日期"
+    prev_release_date = find_previous_release_date(releases, target_date)
+    print(f"本次发布：{version_text}（{target_date}），上一次发布：{prev_release_date or '无'}")
 
     matched = []
     for record in records:
@@ -343,7 +367,7 @@ def main():
             parsed_str = online_date.strftime("%Y-%m-%d %H:%M:%S %Z") if online_date else "解析失败/为空"
             print(f"[DEBUG] {desc} | 上线日期原始值: {raw_online_date} | 解析结果: {parsed_str}")
 
-        if not online_date or online_date.date() != target_date:
+        if not online_date or not belongs_to_release(online_date.date(), prev_release_date, target_date):
             continue
         platform_value = get_select_value(fields, FIELD_PLATFORM)
         if platform_value in SKIP_PLATFORM_VALUES:
@@ -351,7 +375,7 @@ def main():
         matched.append(fields)
 
     if not matched:
-        print(f"{target_date} 没有匹配到上线日期为目标日期的需求，跳过")
+        print(f"{target_date} 没有匹配到属于本次发布的需求，跳过")
         return
 
     # ===== 按人统计 =====
@@ -392,7 +416,7 @@ def main():
 
     # ===== 拼装消息 =====
     total_features = sum(sum(s.values()) for s in owner_stats.values())
-    lines = [f"📋 本次发布（{target_date}）验收总览：共 {total_features} 个需求"]
+    lines = [f"📋 本次发布（{version_text}，{target_date}）验收总览：共 {total_features} 个需求"]
 
     lines.append("【按人统计】")
     at_names_in_order = []

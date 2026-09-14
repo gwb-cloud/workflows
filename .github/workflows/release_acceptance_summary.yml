@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       target_date:
-        description: '指定要检查的发布日期，格式 2026-08-21，留空则默认今天'
+        description: '指定要检查的发布日期，格式 2026-08-21，留空则自动取节点更新总表里的下一次发布'
         required: false
         default: ''
       debug:

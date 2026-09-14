@@ -7,7 +7,7 @@
 
 需要 GitHub Actions Secrets：
 - FEISHU_APP_ID_CLI / FEISHU_APP_SECRET_CLI
-- BEEHIVE_WEBHOOK_P3_REDBLACK（复用红黑榜那个群，也可以换成别的）
+- BEEHIVE_WEBHOOK_P2_WORKFLOW（上线流程验收群，跟"发布验收总览"同一个机器人）
 """
 
 import requests
@@ -35,7 +35,7 @@ def save_state(state):
 
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID_CLI"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET_CLI"]
-BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_P3_REDBLACK"]
+BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_P2_WORKFLOW"]
 
 BLIND_TEST_APP_TOKEN = "FnFab3FDKa0JU6sqa19cDVpHnM7"
 
@@ -197,19 +197,17 @@ def main():
 
     issue_count = sum(1 for r in records if is_case_done(r["fields"]) and has_issue(r["fields"]))
 
-    # 每日快照，用于"今日新增"这个辅助信息（整体 + 按人）
+    # 每日快照，用于整体进度的"今日新增"
     today_str = now.strftime("%Y-%m-%d")
     state = load_state()
     prev = state.get(table_name)
     mac_delta = mac_done_count - prev["mac_done"] if prev else None
     iphone_delta = iphone_done_count - prev["iphone_done"] if prev else None
-    prev_owner_done = prev.get("owner_done", {}) if prev else {}
 
     state[table_name] = {
         "date": today_str,
         "mac_done": mac_done_count,
         "iphone_done": iphone_done_count,
-        "owner_done": dict(owner_done),
     }
     save_state(state)
 
@@ -236,11 +234,8 @@ def main():
     if behind_owners:
         behind_owners.sort(key=lambda x: x[3])  # 完成度最低的排前面
         lines.append(f"🚨 完成度低于预期进度（{expected_pct:.1f}%）的人员：")
-        for owner, done, assigned, actual_pct in behind_owners:
-            remaining = assigned - done
-            prev_done = prev_owner_done.get(owner)
-            delta_text = f"{done - prev_done}个" if prev_done is not None else "0个（首次统计）"
-            lines.append(f"- {owner}：今日完成 {delta_text}，剩余 {remaining}/{assigned}，进度{actual_pct:.0f}%")
+        for owner, _, _, actual_pct in behind_owners:
+            lines.append(f"- {owner}：进度 {actual_pct:.0f}%")
     else:
         lines.append("✅ 所有人完成度均达到预期进度")
 
@@ -259,7 +254,7 @@ def main():
                 tag_records[tag].append(fields)
 
     if tag_records:
-        lines.append("📦 各发布日期抽检完成度（完成数/总数，括号内为发现问题数）：")
+        lines.append("📦 各版本抽检完成度（完成数/总数，括号内为发现问题数）：")
         for tag, fields_list in sorted(tag_records.items()):
             done = sum(1 for f in fields_list if is_case_done(f))
             tag_issues = sum(1 for f in fields_list if is_case_done(f) and has_issue(f))
