@@ -55,9 +55,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `weekly_redblack.py` | 每周一9点 | 本月红黑榜按人汇总 | 只读 | `BEEHIVE_WEBHOOK_P3_REDBLACK` |
 | `monthly_blind_test_setup.py` | 每月1日9点 | 找/建 `M{n}人员` 列（上月顺序循环左移一位）→ 找/建 `M{n}验收表`（二级模块选项从用例库快照）→ 全量用例轮流分配验收人 | CLI 高权限 | 不发消息 |
 | `blind_test_tagging.py` | 每天11点 | 按上文规则确定下一次发布及其需求，二级模块关键词匹配需求描述，在多选字段"本次抽检版本号"写入**版本号**（选项不存在会先自动添加）。每个版本的抽检总量 = 已打标 + 关键词命中，不足 200 条才从未完成用例里随机补齐到 200，重复运行不会继续增长 | CLI 高权限 | 不发消息 |
-| `blind_test_progress_check.py` | 每天19点 | 时间进度基准线（本月第几天/总天数）vs 实际完成度：整体（Mac/iPhone 分端，带今日新增）；落后人员只列"姓名：进度 X%"（两端都填才算该人完成一条）；各版本抽检完成度 | CLI 高权限 | `BEEHIVE_WEBHOOK_P2_WORKFLOW`（上线流程验收群） |
+| `blind_test_progress_check.py` | 每天19点 | 时间进度基准线（本月第几天/总天数）vs 实际完成度：整体（Mac/iPhone 分端，带今日新增）；落后人员只列"姓名：进度 X%"；各版本抽检完成度 | CLI 高权限 | `BEEHIVE_WEBHOOK_P2_WORKFLOW`（上线流程验收群） |
 | `test_webhook.py` | 手动 | 只测 webhook 连通性 | - | `BEEHIVE_WEBHOOK` |
 | `diagnose_at_users.py` | 手动 | 逐人发一条 @ 测试消息，排查哪个人的蜂巢 ID 有问题 | - | `BEEHIVE_WEBHOOK_YANSHOU` |
+
+### 盲测进度的统计口径
+
+- **某一端"已验收"= 结果字段非空且不是"待验收"**（`RESULT_PENDING_VALUES`）。两端的进度和结论经常不一致，实际值不止"通过/不通过"（还会出现"不涉及""阻塞"等），所以不能按固定选项判断。
+- **个人进度按两端分别算**：一条用例 = 2 个待办（Mac 一个、iPhone 一个），个人进度 =（已填 Mac 数 + 已填 iPhone 数）/（分到条数 × 2），避免一端没动就把整个人的进度拉到 0。
+- **用例级"完成"（`is_case_done`，用于各版本抽检完成度和发现问题数）仍要求两端都填**。
+- **"发现问题"= 任意一端结果是"不通过"**，且该用例两端都已填。
 
 ## 飞书应用与权限
 

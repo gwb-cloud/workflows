@@ -44,7 +44,9 @@ FIELD_IPHONE_RESULT = "iPhone验收结果"
 FIELD_MAC_RESULT = "Mac验收结果"
 FIELD_TAG = "本次抽检版本号"
 
-RESULT_DONE_VALUES = {"通过", "不通过"}
+# 「有值即有效」：两端进度/结论常常不一致，值不可能全是通过/不通过，
+# 所以只要结果字段非空就算这一端已验收，只有空值和"待验收"算没做
+RESULT_PENDING_VALUES = {"", "待验收"}
 
 
 def get_tenant_token():
@@ -136,11 +138,14 @@ def get_text_value(fields, field_name):
     return ""
 
 
+def is_result_done(fields, field_name):
+    """这一端是否已验收：结果字段有值（且不是"待验收"）就算"""
+    return get_select_value(fields, field_name).strip() not in RESULT_PENDING_VALUES
+
+
 def is_case_done(fields):
-    """iPhone和Mac两端结果都填了（通过/不通过），才算这条用例完成"""
-    iphone = get_select_value(fields, FIELD_IPHONE_RESULT)
-    mac = get_select_value(fields, FIELD_MAC_RESULT)
-    return iphone in RESULT_DONE_VALUES and mac in RESULT_DONE_VALUES
+    """iPhone和Mac两端都填了结果，才算这条用例整体完成"""
+    return is_result_done(fields, FIELD_IPHONE_RESULT) and is_result_done(fields, FIELD_MAC_RESULT)
 
 
 def has_issue(fields):
@@ -179,20 +184,22 @@ def main():
     # ===== 按人、按端统计完成情况 =====
     mac_done_count = 0
     iphone_done_count = 0
-    owner_done = defaultdict(int)   # 两端都完成才算这个人的一条
+    # 个人进度按两端分别算：一条用例算2个待办（Mac一个、iPhone一个），
+    # 两端进度不一致时不会被慢的那端拖死
+    owner_done = defaultdict(int)
     owner_total = defaultdict(int)
 
     for r in records:
         fields = r["fields"]
         owner = get_person_name(fields, FIELD_OWNER)
-        owner_total[owner] += 1
-        mac_done = get_select_value(fields, FIELD_MAC_RESULT) in RESULT_DONE_VALUES
-        iphone_done = get_select_value(fields, FIELD_IPHONE_RESULT) in RESULT_DONE_VALUES
+        owner_total[owner] += 2
+        mac_done = is_result_done(fields, FIELD_MAC_RESULT)
+        iphone_done = is_result_done(fields, FIELD_IPHONE_RESULT)
         if mac_done:
             mac_done_count += 1
+            owner_done[owner] += 1
         if iphone_done:
             iphone_done_count += 1
-        if mac_done and iphone_done:
             owner_done[owner] += 1
 
     issue_count = sum(1 for r in records if is_case_done(r["fields"]) and has_issue(r["fields"]))
