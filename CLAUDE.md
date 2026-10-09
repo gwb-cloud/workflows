@@ -56,6 +56,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `monthly_blind_test_setup.py` | 每月1日9点 | 找/建 `M{n}人员` 列（上月顺序循环左移一位）→ 找/建 `M{n}验收表`（二级模块选项从用例库快照）→ 全量用例轮流分配验收人 | CLI 高权限 | 不发消息 |
 | `blind_test_tagging.py` | 每天11点 | 按上文规则确定下一次发布及其需求，二级模块关键词匹配需求描述，在多选字段"本次抽检版本号"写入**版本号**（选项不存在会先自动添加）。每个版本的抽检总量 = 已打标 + 关键词命中，不足 200 条才从未完成用例里随机补齐到 200，重复运行不会继续增长 | CLI 高权限 | 不发消息 |
 | `blind_test_progress_check.py` | 每天19点 | 时间进度基准线（本月第几天/总天数）vs 实际完成度：整体（Mac/iPhone 分端，带今日新增）；落后人员只列"姓名：进度 X%"；各版本抽检完成度 | CLI 高权限 | `BEEHIVE_WEBHOOK_P2_WORKFLOW`（上线流程验收群） |
+| `blind_test_table_cleanup.py` | 手动 | 原始目标表删了用例后，按「目标」文本对账，把当月验收表里多出来的记录删掉（同名多条时优先保留已填结果/已打标的）。默认 DRY RUN，`confirm=yes` 才真删，另有 `max_delete` 安全阀 | CLI 高权限 | 不发消息 |
 | `test_webhook.py` | 手动 | 只测 webhook 连通性 | - | `BEEHIVE_WEBHOOK` |
 | `diagnose_at_users.py` | 手动 | 逐人发一条 @ 测试消息，排查哪个人的蜂巢 ID 有问题 | - | `BEEHIVE_WEBHOOK_YANSHOU` |
 

@@ -1,0 +1,34 @@
+name: 验收表对账清理
+
+on:
+  workflow_dispatch:
+    inputs:
+      table_name:
+        description: '要清理的表名，留空则默认当月（例 M10验收表）'
+        required: false
+        default: ''
+      confirm:
+        description: '填 yes 才真正删除，留空只做预演（DRY RUN）'
+        required: false
+        default: ''
+      max_delete:
+        description: '安全阀：一次最多删多少条，超过直接中止'
+        required: false
+        default: '200'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python blind_test_table_cleanup.py
+        env:
+          FEISHU_APP_ID_CLI: ${{ secrets.FEISHU_APP_ID_CLI }}
+          FEISHU_APP_SECRET_CLI: ${{ secrets.FEISHU_APP_SECRET_CLI }}
+          TARGET_TABLE_NAME: ${{ github.event.inputs.table_name }}
+          CONFIRM_DELETE: ${{ github.event.inputs.confirm }}
+          MAX_DELETE: ${{ github.event.inputs.max_delete }}
