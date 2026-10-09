@@ -1,4 +1,4 @@
-name: 验收表对账清理
+name: 验收表对账同步
 
 on:
   workflow_dispatch:
@@ -8,11 +8,15 @@ on:
         required: false
         default: ''
       confirm:
-        description: '填 yes 才真正删除，留空只做预演（DRY RUN）'
+        description: '填 yes 才真正执行删除/新增，留空只做预演（DRY RUN）'
         required: false
         default: ''
       max_delete:
         description: '安全阀：一次最多删多少条，超过直接中止'
+        required: false
+        default: '200'
+      max_create:
+        description: '安全阀：一次最多新增多少条，超过直接中止'
         required: false
         default: '200'
 
@@ -32,3 +36,4 @@ jobs:
           TARGET_TABLE_NAME: ${{ github.event.inputs.table_name }}
           CONFIRM_DELETE: ${{ github.event.inputs.confirm }}
           MAX_DELETE: ${{ github.event.inputs.max_delete }}
+          MAX_CREATE: ${{ github.event.inputs.max_create }}
