@@ -33,6 +33,10 @@ def save_state(state):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
+# 周六周日不发进度提醒（.yml 的 cron 已经限定周一到周五，这里再兜一层，
+# 防止 GitHub Actions 延迟跨天把周五的任务拖到周六才跑）。手动触发时传 FORCE_SEND=true 可强制发送
+FORCE_SEND = os.environ.get("FORCE_SEND", "").strip().lower() == "true"
+
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID_CLI"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET_CLI"]
 BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_P2_WORKFLOW"]
@@ -165,8 +169,13 @@ def send_to_beehive(text):
 
 
 def main():
-    token = get_tenant_token()
     now = datetime.now(BEIJING_TZ)
+    if now.weekday() >= 5 and not FORCE_SEND:
+        print(f"今天是{'周六' if now.weekday() == 5 else '周日'}（北京时间 {now:%Y-%m-%d %H:%M}），跳过进度提醒。"
+              f"需要强制发送时，手动触发并把 force_send 设为 true")
+        return
+
+    token = get_tenant_token()
     table_name = f"M{now.month}验收表"
 
     table_id = find_table_by_name(token, BLIND_TEST_APP_TOKEN, table_name)
