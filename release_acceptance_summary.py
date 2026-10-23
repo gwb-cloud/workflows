@@ -24,6 +24,7 @@ PASS_STATUS_VALUES 算通过，SKIP_STATUS_VALUES 不纳入统计，其余状态
 
 import requests
 import os
+import time
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -81,6 +82,38 @@ TARGET_DATE_STR = os.environ.get("TARGET_RELEASE_DATE", "")
 ALERT_WINDOW_WORKDAYS = 5
 
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
+FORCE_RUN = os.environ.get("FORCE_RUN", "").strip().lower() == "true"
+
+# 飞书限流/系统繁忙这类错误，等一会儿重试通常就好了
+RETRYABLE_CODES = {1254290, 1254291, 1254607, 1255001, 1255040, 99991400}
+
+
+def api(method, url, token=None, params=None, body=None, timeout=20, tries=4):
+    """统一的飞书请求入口：网络抖动、HTTP 5xx/429、飞书限流码都自动退避重试"""
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    delay = 2
+    for attempt in range(1, tries + 1):
+        reason = None
+        try:
+            resp = requests.request(method, url, headers=headers, params=params, json=body, timeout=timeout)
+            if resp.status_code in (429, 500, 502, 503, 504):
+                reason = f"HTTP {resp.status_code}"
+            else:
+                data = resp.json()
+                code = data.get("code")
+                if code == 0:
+                    return data
+                if code in RETRYABLE_CODES:
+                    reason = f"飞书 code={code} {data.get('msg')}"
+                else:
+                    return data
+        except requests.RequestException as e:
+            reason = f"请求异常 {e}"
+        if attempt == tries:
+            raise RuntimeError(f"请求失败（已重试{tries}次）：{url.split('/open-apis/')[-1]} → {reason}")
+        print(f"⚠️ 第{attempt}次失败（{reason}），{delay}s 后重试")
+        time.sleep(delay)
+        delay *= 2
 
 # 产品owner姓名（必须跟飞书里显示的名字完全一致，用来匹配数据）→ 蜂巢信息
 # 如果这个人在蜂巢里的显示名跟飞书不一样（花名/曾用名不同），nickname 填蜂巢那边真实显示的名字，
@@ -104,28 +137,21 @@ PERSON_BEEHIVE_ID = {
 
 
 def get_tenant_token():
-    resp = requests.post(
-        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-        json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET},
-        timeout=10,
-    )
-    data = resp.json()
+    data = api("POST", "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+               body={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET})
     if data.get("code") != 0:
-        raise RuntimeError(f"获取 token 失败：{data}")
+        raise RuntimeError(f"获取 token 失败（检查 FEISHU_APP_ID / FEISHU_APP_SECRET）：{data}")
     return data["tenant_access_token"]
 
 
 def get_all_records(token, app_token, table_id):
-    records = []
-    page_token = None
-    headers = {"Authorization": f"Bearer {token}"}
+    records, page_token = [], None
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records"
     while True:
-        params = {"page_size": 100}
+        params = {"page_size": 500}
         if page_token:
             params["page_token"] = page_token
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-        data = resp.json()
+        data = api("GET", url, token=token, params=params)
         if data.get("code") != 0:
             raise RuntimeError(f"拉取记录失败：{data}")
         records.extend(data["data"]["items"])
@@ -302,15 +328,17 @@ def get_related_issues(token, feature_descriptions, window_start, window_end):
 
 
 def main():
-    token = get_tenant_token()
     now = datetime.now(BEIJING_TZ)
     today = now.date()
+    if now.weekday() >= 5 and not FORCE_RUN and not TARGET_DATE_STR:
+        print(f"今天是{'周六' if now.weekday() == 5 else '周日'}（北京时间 {now:%Y-%m-%d}），跳过。"
+              f"需要强制执行时，手动触发并把 force_run 设为 true")
+        return
+
+    token = get_tenant_token()
 
     releases = get_releases(token)
     print(f"节点更新总表共读取到 {len(releases)} 个发布日期")
-
-    records = get_all_records(token, RELEASE_APP_TOKEN, RELEASE_TABLE_ID)
-    print(f"分工表共读取到 {len(records)} 条记录")
 
     if TARGET_DATE_STR:
         target_date = datetime.strptime(TARGET_DATE_STR, "%Y-%m-%d").date()
@@ -325,6 +353,9 @@ def main():
         if wd is None or wd > ALERT_WINDOW_WORKDAYS:
             print(f"还没进入提前{ALERT_WINDOW_WORKDAYS}个工作日的提醒窗口，跳过")
             return
+
+    records = get_all_records(token, RELEASE_APP_TOKEN, RELEASE_TABLE_ID)
+    print(f"分工表共读取到 {len(records)} 条记录")
 
     version_text = "/".join(releases.get(target_date, [])) or "节点更新总表中无此日期"
     prev_release_date = find_previous_release_date(releases, target_date)

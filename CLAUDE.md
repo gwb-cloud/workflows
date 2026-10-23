@@ -28,6 +28,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **没有共享模块，公共代码是逐个脚本复制粘贴的**：`get_tenant_token`、`get_all_records`（分页）、`parse_date`、`get_select_value`/`get_text_value`/`get_person_name`、`send_to_beehive`。改其中任何一个的行为时，要 grep 全仓库同步修改。特别是：
   - `PERSON_BEEHIVE_ID` / 人员 ID 在 `check_and_notify.py`、`release_acceptance_summary.py`、`diagnose_at_users.py` 三处各有一份
   - 发布日期相关的 `get_releases` / `find_next_release_date` / `find_previous_release_date` / `belongs_to_release` 在 `release_acceptance_summary.py` 和 `blind_test_tagging.py` 各有一份，**两份必须保持一致**，否则两边算出的"本次发布"会不同
+### 省调用次数的三条约定（飞书接口有调用次数上限）
+
+- **先判断再读表**：周末直接退出；离发布超过 `ALERT_WINDOW_WORKDAYS`（5 个工作日）也直接退出，不要先把整张表拉下来再判断。`blind_test_tagging.py` 曾经每天无条件全表扫描 + 逐条写入。
+- **写操作一律走 batch**（`records/batch_update` / `batch_create` / `batch_delete`，每批 ≤450 条）。逐条 PUT 200 次既慢又会触发飞书写限流——这正是 2026-09~10 月打标任务连续两周失败的原因。
+- **所有飞书请求走 `api()` 封装**：HTTP 429/5xx 和飞书限流码（`RETRYABLE_CODES`）自动退避重试 4 次，其余错误码原样返回给调用方判断。新脚本直接复制这个函数，不要再裸写 `requests.get/post/put`。
+
 - 脚本顶部的 docstring 有些已经过时（例如 `weekly_redblack.py`/`check_and_notify.py` 提到的 `BEEHIVE_WEBHOOK_PRODUCT` 已不再使用），**以代码为准**。
 
 ### 发布日期的数据源（所有发布相关通知的基准）
@@ -51,10 +57,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 脚本 | 触发时间（北京） | 作用 | 飞书应用 | 发消息用的 Secret |
 |---|---|---|---|---|
 | `check_and_notify.py` | 每天10点 | 见项目1 | 只读 | `BEEHIVE_WEBHOOK_YANSHOU` + `BEEHIVE_WEBHOOK_P1_NODE` |
-| `release_acceptance_summary.py` | 每天10点、18点 | 按上文规则确定下一次发布及其需求，距发布 ≤5 个工作日才发；标题带版本号；按分工表「状态」字段判断通过/待验收，按人/按端统计；验收表中窗口期内提出、二级模块模糊匹配、状态=待修复的遗留问题按 P0-P4 计数 | 只读 | `BEEHIVE_WEBHOOK_P2_WORKFLOW` |
+| `release_acceptance_summary.py` | 周一~周五10点、18点 | 按上文规则确定下一次发布及其需求，距发布 ≤5 个工作日才发；标题带版本号；按分工表「状态」字段判断通过/待验收，按人/按端统计；验收表中窗口期内提出、二级模块模糊匹配、状态=待修复的遗留问题按 P0-P4 计数 | 只读 | `BEEHIVE_WEBHOOK_P2_WORKFLOW` |
 | `weekly_redblack.py` | 每周一9点 | 本月红黑榜按人汇总 | 只读 | `BEEHIVE_WEBHOOK_P3_REDBLACK` |
 | `monthly_blind_test_setup.py` | 每月1日9点 | 找/建 `M{n}人员` 列（上月顺序循环左移一位）→ 找/建 `M{n}验收表`（二级模块选项从用例库快照）→ 全量用例轮流分配验收人 | CLI 高权限 | 不发消息 |
-| `blind_test_tagging.py` | 每天11点 | 按上文规则确定下一次发布及其需求，二级模块关键词匹配需求描述，在多选字段"本次抽检版本号"写入**版本号**（选项不存在会先自动添加）。每个版本的抽检总量 = 已打标 + 关键词命中，不足 200 条才从未完成用例里随机补齐到 200，重复运行不会继续增长 | CLI 高权限 | 不发消息 |
+| `blind_test_tagging.py` | 周一~周五11点 | 按上文规则确定下一次发布及其需求，二级模块关键词匹配需求描述，在多选字段"本次抽检版本号"写入**版本号**（选项不存在会先自动添加）。每个版本的抽检总量 = 已打标 + 关键词命中，不足 200 条才从未完成用例里随机补齐到 200，重复运行不会继续增长 | CLI 高权限 | 不发消息 |
 | `blind_test_progress_check.py` | 周一~周五19点 | 时间进度基准线（本月第几天/总天数）vs 实际完成度：整体（Mac/iPhone 分端，带今日新增）；落后人员只列"姓名：进度 X%"；各版本抽检完成度。周六周日不发（cron 限定 1-5，脚本里按北京时区再兜一层，手动触发传 force_send=true 可强制发） | CLI 高权限 | `BEEHIVE_WEBHOOK_P2_WORKFLOW`（上线流程验收群） |
 | `blind_test_table_cleanup.py` | 手动 | 原始目标表增删用例后，按「目标」文本双向对账：删掉验收表里源表已没有的记录（有数据也删，同名多条时优先留已填结果/已打标的），并把源表新增的用例补进来（验收人给当前条数最少的人，二级模块缺的选项自动补）。默认 DRY RUN，`confirm=yes` 才执行，另有 `max_delete`/`max_create` 安全阀 | CLI 高权限 | 不发消息 |
 | `blind_test_mainflow_sync.py` | 手动 | 按「目标」把源表「是否主流程」同步到当月验收表（目标表没这个字段就照源表类型新建），并把主流程用例的「本次抽检版本号」改成只有 `TAG_VALUES` 指定的值（非主流程行不动）。默认 DRY RUN，`confirm=yes` 才写表 | CLI 高权限 | 不发消息 |

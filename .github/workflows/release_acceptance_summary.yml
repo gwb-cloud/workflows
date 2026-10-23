@@ -2,12 +2,16 @@ name: 发布验收总览
 
 on:
   schedule:
-    - cron: '0 2 * * *'    # UTC 2点 = 北京时间上午10点
-    - cron: '0 10 * * *'   # UTC 10点 = 北京时间下午18点
+    - cron: '0 2 * * 1-5'    # UTC 2点 = 北京时间上午10点，周一到周五
+    - cron: '0 10 * * 1-5'   # UTC 10点 = 北京时间下午18点，周一到周五
   workflow_dispatch:
     inputs:
       target_date:
         description: '指定要检查的发布日期，格式 2026-08-21，留空则自动取节点更新总表里的下一次发布'
+        required: false
+        default: ''
+      force_run:
+        description: '周末也强制执行，填 true'
         required: false
         default: ''
       debug:
@@ -32,3 +36,4 @@ jobs:
           BEEHIVE_WEBHOOK_P2_WORKFLOW: ${{ secrets.BEEHIVE_WEBHOOK_P2_WORKFLOW }}
           TARGET_RELEASE_DATE: ${{ github.event.inputs.target_date }}
           DEBUG: ${{ github.event.inputs.debug }}
+          FORCE_RUN: ${{ github.event.inputs.force_run }}

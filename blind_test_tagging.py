@@ -8,6 +8,9 @@
 每次发布的抽检总量（已打标 + 关键词命中）不足200条时，才从未验证用例里随机补齐到200条，
 所以每天重复运行不会让同一个版本的打标数量越来越多。
 
+只在距离发布 ALERT_WINDOW_WORKDAYS 个工作日以内才干活，周末直接跳过，
+避免每天空跑把整表读一遍、白白消耗飞书接口调用次数。
+
 需要 GitHub Actions Secrets：
 - FEISHU_APP_ID_CLI / FEISHU_APP_SECRET_CLI
 （CLI 应用需要被添加为节点更新总表、分工表、盲测文档三个多维表格的协作者）
@@ -16,6 +19,7 @@
 import requests
 import os
 import random
+import time
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -48,30 +52,59 @@ TARGET_DATE_STR = os.environ.get("TARGET_RELEASE_DATE", "")
 # 关键词匹配数量不够时，从未验证用例里随机补齐到这个数
 MIN_SAMPLE_SIZE = 200
 
+# 距离发布几个工作日以内才开始打标（跟 release_acceptance_summary.py 保持一致）
+ALERT_WINDOW_WORKDAYS = 5
+
+FORCE_RUN = os.environ.get("FORCE_RUN", "").strip().lower() == "true"
+
+# 飞书限流/系统繁忙这类错误，等一会儿重试通常就好了
+RETRYABLE_CODES = {1254290, 1254291, 1254607, 1255001, 1255040, 99991400}
+
+
+def api(method, url, token=None, params=None, body=None, timeout=20, tries=4):
+    """统一的飞书请求入口：网络抖动、HTTP 5xx/429、飞书限流码都自动退避重试"""
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    delay = 2
+    for attempt in range(1, tries + 1):
+        reason = None
+        try:
+            resp = requests.request(method, url, headers=headers, params=params, json=body, timeout=timeout)
+            if resp.status_code in (429, 500, 502, 503, 504):
+                reason = f"HTTP {resp.status_code}"
+            else:
+                data = resp.json()
+                code = data.get("code")
+                if code == 0:
+                    return data
+                if code in RETRYABLE_CODES:
+                    reason = f"飞书 code={code} {data.get('msg')}"
+                else:
+                    return data   # 非限流类错误直接交给调用方判断，不重试
+        except requests.RequestException as e:
+            reason = f"请求异常 {e}"
+        if attempt == tries:
+            raise RuntimeError(f"请求失败（已重试{tries}次）：{url.split('/open-apis/')[-1]} → {reason}")
+        print(f"⚠️ 第{attempt}次失败（{reason}），{delay}s 后重试")
+        time.sleep(delay)
+        delay *= 2
+
 
 def get_tenant_token():
-    resp = requests.post(
-        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-        json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET},
-        timeout=10,
-    )
-    data = resp.json()
+    data = api("POST", "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+               body={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET})
     if data.get("code") != 0:
-        raise RuntimeError(f"获取 token 失败：{data}")
+        raise RuntimeError(f"获取 token 失败（检查 FEISHU_APP_ID_CLI / FEISHU_APP_SECRET_CLI）：{data}")
     return data["tenant_access_token"]
 
 
 def get_all_records(token, app_token, table_id):
-    records = []
-    page_token = None
-    headers = {"Authorization": f"Bearer {token}"}
+    records, page_token = [], None
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records"
     while True:
-        params = {"page_size": 100}
+        params = {"page_size": 500}
         if page_token:
             params["page_token"] = page_token
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-        data = resp.json()
+        data = api("GET", url, token=token, params=params)
         if data.get("code") != 0:
             raise RuntimeError(f"拉取记录失败：{data}")
         records.extend(data["data"]["items"])
@@ -82,16 +115,13 @@ def get_all_records(token, app_token, table_id):
 
 
 def get_all_tables(token, app_token):
-    headers = {"Authorization": f"Bearer {token}"}
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables"
-    tables = []
-    page_token = None
+    tables, page_token = [], None
     while True:
         params = {"page_size": 100}
         if page_token:
             params["page_token"] = page_token
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-        data = resp.json()
+        data = api("GET", url, token=token, params=params)
         if data.get("code") != 0:
             raise RuntimeError(f"拉取表列表失败：{data}")
         tables.extend(data["data"]["items"])
@@ -108,13 +138,18 @@ def find_table_by_name(token, app_token, table_name):
     return None
 
 
-def update_record(token, app_token, table_id, record_id, fields):
-    headers = {"Authorization": f"Bearer {token}"}
-    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}"
-    resp = requests.put(url, headers=headers, json={"fields": fields}, timeout=10)
-    data = resp.json()
-    if data.get("code") != 0:
-        raise RuntimeError(f"更新记录失败：{data}")
+def batch_update(token, app_token, table_id, updates, chunk_size=450):
+    """批量更新。以前是一条一条 PUT，200 条就是 200 次调用，又慢又容易被限流"""
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_update"
+    done = 0
+    for i in range(0, len(updates), chunk_size):
+        chunk = updates[i:i + chunk_size]
+        data = api("POST", url, token=token, body={"records": chunk})
+        if data.get("code") != 0:
+            raise RuntimeError(f"批量更新失败（已更新 {done} 条）：{data}")
+        done += len(chunk)
+        print(f"已更新 {done}/{len(updates)} 条")
+    return done
 
 
 def parse_date(ms_timestamp):
@@ -149,10 +184,8 @@ def get_select_value(fields, field_name):
 
 
 def get_field_type(token, app_token, table_id, field_name):
-    headers = {"Authorization": f"Bearer {token}"}
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
-    resp = requests.get(url, headers=headers, timeout=10)
-    data = resp.json()
+    data = api("GET", url, token=token, params={"page_size": 100})
     if data.get("code") != 0:
         raise RuntimeError(f"拉取字段失败：{data}")
     for f in data["data"]["items"]:
@@ -163,24 +196,20 @@ def get_field_type(token, app_token, table_id, field_name):
 
 def ensure_multi_select_option(token, app_token, table_id, field_id, option_name):
     """多选字段写入前，确认这个选项存在，不存在就先加上"""
-    headers = {"Authorization": f"Bearer {token}"}
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields/{field_id}"
-    resp = requests.get(url, headers=headers, timeout=10)
-    data = resp.json()
+    data = api("GET", url, token=token)
     if data.get("code") != 0:
         raise RuntimeError(f"读取字段详情失败：{data}")
-    options = data["data"]["field"].get("property", {}).get("options", [])
+    field = data["data"]["field"]
+    options = field.get("property", {}).get("options", [])
     if any(o["name"] == option_name for o in options):
         return
-    options.append({"name": option_name})
-    resp = requests.put(url, headers=headers, json={
-        "field_name": data["data"]["field"]["field_name"],
-        "type": 4,
-        "property": {"options": options},
-    }, timeout=10)
-    data = resp.json()
+    options = [{"name": o["name"]} for o in options] + [{"name": option_name}]
+    data = api("PUT", url, token=token,
+               body={"field_name": field["field_name"], "type": 4, "property": {"options": options}})
     if data.get("code") != 0:
         raise RuntimeError(f"新增多选选项失败：{data}")
+    print(f"已给「{FIELD_TAG}」补充选项：{option_name}")
 
 
 def get_multi_select_values(fields, field_name):
@@ -234,6 +263,18 @@ def belongs_to_release(online_date, prev_release_date, target_date):
     return prev_release_date < online_date <= target_date
 
 
+def workdays_between(start_date, end_date):
+    """start_date 到 end_date（含首尾）之间有几个工作日"""
+    if end_date < start_date:
+        return None
+    days, d = 0, start_date
+    while d <= end_date:
+        if d.weekday() < 5:
+            days += 1
+        d += timedelta(days=1)
+    return days
+
+
 def get_existing_tags(fields, field_type):
     if field_type == 4:  # 多选
         return set(get_multi_select_values(fields, FIELD_TAG))
@@ -241,8 +282,13 @@ def get_existing_tags(fields, field_type):
 
 
 def main():
-    token = get_tenant_token()
     now = datetime.now(BEIJING_TZ)
+    if now.weekday() >= 5 and not FORCE_RUN and not TARGET_DATE_STR:
+        print(f"今天是{'周六' if now.weekday() == 5 else '周日'}（北京时间 {now:%Y-%m-%d}），跳过打标。"
+              f"需要强制执行时，手动触发并把 force_run 设为 true")
+        return
+
+    token = get_tenant_token()
 
     # 发布日期和版本号都以节点更新总表为准，不能直接用运行当天，
     # 否则连续巡检多天会打出多个不同的标签，同一次发布被拆成好几份
@@ -257,6 +303,12 @@ def main():
         target_date = find_next_release_date(releases, now.date())
         if target_date is None:
             print("节点更新总表里没有找到任何即将到来的发布日期，跳过")
+            return
+        # 离发布还早的话什么都不做，省掉每天把整张验收表读一遍的开销
+        wd = workdays_between(now.date(), target_date)
+        if wd is not None and wd > ALERT_WINDOW_WORKDAYS and not FORCE_RUN:
+            print(f"下一次发布 {target_date} 还有 {wd} 个工作日，"
+                  f"未进入提前{ALERT_WINDOW_WORKDAYS}个工作日的打标窗口，跳过")
             return
 
     tag_value = "/".join(releases[target_date])
@@ -320,18 +372,21 @@ def main():
             print(f"⚠️ 未验证用例池只剩 {len(pool)} 条，本次实际总数不足{MIN_SAMPLE_SIZE}条")
 
     to_tag = selected - already_tagged
-    if to_tag and field_type == 4:
+    if not to_tag:
+        print(f"没有需要新打标的用例，{tag_value} 已累计抽检 {len(selected)} 条")
+        return
+
+    if field_type == 4:
         ensure_multi_select_option(token, BLIND_TEST_APP_TOKEN, blind_table_id, field_id, tag_value)
 
-    for record_id in to_tag:
+    updates = []
+    for record_id in sorted(to_tag):
         tags = get_existing_tags(records_by_id[record_id], field_type)
         tags.add(tag_value)
-        if field_type == 4:  # 多选
-            value = sorted(tags)
-        else:  # 文本（历史表兼容）
-            value = ",".join(sorted(tags))
-        update_record(token, BLIND_TEST_APP_TOKEN, blind_table_id, record_id, {FIELD_TAG: value})
+        value = sorted(tags) if field_type == 4 else ",".join(sorted(tags))
+        updates.append({"record_id": record_id, "fields": {FIELD_TAG: value}})
 
+    batch_update(token, BLIND_TEST_APP_TOKEN, blind_table_id, updates)
     print(f"本次新打标 {len(to_tag)} 条，{tag_value} 累计抽检 {len(selected)} 条")
 
 
