@@ -64,6 +64,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `blind_test_progress_check.py` | 周一~周五19点 | 时间进度基准线（本月第几天/总天数）vs 实际完成度：整体（Mac/iPhone 分端，带今日新增）；落后人员只列"姓名：进度 X%"；本月各次发版的抽检完成度（按第N次发版的独立结果列统计）+ 抽检结果回填基础列。周六周日不发（cron 限定 1-5，脚本里按北京时区再兜一层，手动触发传 force_send=true 可强制发） | CLI 高权限 | `BEEHIVE_WEBHOOK_P2_WORKFLOW`（上线流程验收群） |
 | `blind_test_table_cleanup.py` | 手动 | 原始目标表增删用例后，按「目标」文本双向对账：删掉验收表里源表已没有的记录（有数据也删，同名多条时优先留已填结果/已打标的），并把源表新增的用例补进来（验收人给当前条数最少的人，二级模块缺的选项自动补）。默认 DRY RUN，`confirm=yes` 才执行，另有 `max_delete`/`max_create` 安全阀 | CLI 高权限 | 不发消息 |
 | `blind_test_mainflow_sync.py` | 手动 | 按「目标」把源表「是否主流程」同步到当月验收表（目标表没这个字段就照源表类型新建），并把主流程用例的「本次抽检版本号」改成只有 `TAG_VALUES` 指定的值（非主流程行不动）。默认 DRY RUN，`confirm=yes` 才写表 | CLI 高权限 | 不发消息 |
+| `blind_test_round_migrate.py` | 手动 | 当月验收表的「分轮结果列」准备/迁移：先体检（列结构、条数、「本次抽检版本号」分布、各列填写情况），按节点更新总表当月发布次数补齐 `第{n}次发版-Mac/iPhone结果`，并可把基础结果列里已有的结果迁进指定某一轮（已有值的列不覆盖，本轮抽中未验的置「待验收」）。默认 DRY RUN，`confirm=yes` 才写表，另有 `max_write` 安全阀 | CLI 高权限 | 不发消息 |
 | `test_webhook.py` | 手动 | 只测 webhook 连通性 | - | `BEEHIVE_WEBHOOK` |
 | `diagnose_at_users.py` | 手动 | 逐人发一条 @ 测试消息，排查哪个人的蜂巢 ID 有问题 | - | `BEEHIVE_WEBHOOK_YANSHOU` |
 
@@ -78,7 +79,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **抽中即置「待验收」**：打标时把本轮两列写成「待验收」，验收人一眼看到本轮范围；统计时「待验收」=没做。
 - **本轮范围**：该轮两列任一非空的行（不再用版本号标记判断范围，标记只作记录）。
 - **结果回填**：`blind_test_progress_check.py` 会把本轮已填的结果回填到基础的 `Mac验收结果`/`iPhone验收结果`（**仅当基础列为空**），避免同一条填两遍、同时让全量覆盖进度照常累加。`BACKFILL=false` 可关掉。
-- 改列名模板要**两个脚本一起改**（`ROUND_MAC_FIELD` / `ROUND_IPHONE_FIELD`），并同步飞书表里已有的列。
+- 改列名模板要**三个脚本一起改**（`ROUND_MAC_FIELD` / `ROUND_IPHONE_FIELD`，打标/进度/迁移），并同步飞书表里已有的列。
+- **切换到这套口径时**（或某个月的表是老结构、已经有抽检在跑），手动跑 `blind_test_round_migrate.py` 补列+迁移。往后每月新表由打标脚本自动建列，不用再跑。
 
 ### 盲测进度的统计口径
 

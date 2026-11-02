@@ -1,0 +1,44 @@
+name: 验收表分轮结果列迁移
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_month:
+        description: '要处理的月份，格式 2026-11，留空取当前月'
+        required: false
+        default: ''
+      create_rounds:
+        description: '要补哪几轮的结果列，逗号分隔如 1,2；留空按节点更新总表里当月的发布次数全补'
+        required: false
+        default: ''
+      migrate_round:
+        description: '把基础结果列里已有的结果迁进第几轮；留空则只体检+建列，不迁移'
+        required: false
+        default: ''
+      migrate_scope:
+        description: '迁移范围：tag（只迁带这一轮版本号的行，默认）/ results（所有基础列有结果的行）'
+        required: false
+        default: 'tag'
+      confirm:
+        description: '确认写入飞书表，填 yes；留空只做 DRY RUN'
+        required: false
+        default: ''
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python blind_test_round_migrate.py
+        env:
+          FEISHU_APP_ID_CLI: ${{ secrets.FEISHU_APP_ID_CLI }}
+          FEISHU_APP_SECRET_CLI: ${{ secrets.FEISHU_APP_SECRET_CLI }}
+          TARGET_MONTH: ${{ github.event.inputs.target_month }}
+          CREATE_ROUNDS: ${{ github.event.inputs.create_rounds }}
+          MIGRATE_ROUND: ${{ github.event.inputs.migrate_round }}
+          MIGRATE_SCOPE: ${{ github.event.inputs.migrate_scope }}
+          CONFIRM: ${{ github.event.inputs.confirm }}
