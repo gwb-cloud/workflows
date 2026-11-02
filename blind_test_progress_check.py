@@ -43,6 +43,19 @@ BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_P2_WORKFLOW"]
 
 BLIND_TEST_APP_TOKEN = "FnFab3FDKa0JU6sqa19cDVpHnM7"
 
+# 节点更新总表：用来把发布日期换算成"本月第几次发版"
+NODE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
+NODE_TABLE_ID = "tblSDaRAkltfVtx6"
+FIELD_NODE_VERSION = "版本号"
+FIELD_NODE_RELEASE_DATE = "版本发布日期"
+
+# 每次发版的抽检结果列（跟 blind_test_tagging.py 保持一致，改名要两边一起改）
+ROUND_MAC_FIELD = "第{n}次发版-Mac结果"
+ROUND_IPHONE_FIELD = "第{n}次发版-iPhone结果"
+
+# 抽检轮次的结果回填到基础结果列（基础列为空时才写），避免验收人同一条填两遍
+BACKFILL = os.environ.get("BACKFILL", "true").strip().lower() != "false"
+
 FIELD_OWNER = "验收人"
 FIELD_IPHONE_RESULT = "iPhone验收结果"
 FIELD_MAC_RESULT = "Mac验收结果"
@@ -110,6 +123,52 @@ def get_all_records(token, app_token, table_id):
             break
         page_token = data["data"].get("page_token")
     return records
+
+
+def parse_date(ms_timestamp):
+    """飞书日期字段换算成北京时间后固定停在23:00，需要再加1小时才能拿到正确日期"""
+    if not ms_timestamp:
+        return None
+    return datetime.fromtimestamp(ms_timestamp / 1000, tz=BEIJING_TZ) + timedelta(hours=1)
+
+
+def get_month_releases(token, year, month):
+    """当月的发布：返回 [(轮次, 版本号文案, 发布日期), ...]，按日期排序"""
+    by_date = defaultdict(list)
+    for r in get_all_records(token, NODE_APP_TOKEN, NODE_TABLE_ID):
+        fields = r["fields"]
+        d = parse_date(fields.get(FIELD_NODE_RELEASE_DATE))
+        if not d or d.year != year or d.month != month:
+            continue
+        version = fields.get(FIELD_NODE_VERSION)
+        version = str(version) if isinstance(version, (int, float)) else get_text_value(fields, FIELD_NODE_VERSION)
+        if version:
+            by_date[d.date()].append(version)
+    return [(i + 1, "/".join(by_date[d]), d) for i, d in enumerate(sorted(by_date))]
+
+
+def get_table_field_names(token, app_token, table_id):
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+    resp = requests.get(url, headers=headers, params={"page_size": 100}, timeout=15)
+    data = resp.json()
+    if data.get("code") != 0:
+        raise RuntimeError(f"拉取字段失败：{data}")
+    return {f["field_name"] for f in data["data"]["items"]}
+
+
+def batch_update(token, app_token, table_id, updates, chunk_size=450):
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_update"
+    headers = {"Authorization": f"Bearer {token}"}
+    done = 0
+    for i in range(0, len(updates), chunk_size):
+        chunk = updates[i:i + chunk_size]
+        resp = requests.post(url, headers=headers, json={"records": chunk}, timeout=30)
+        data = resp.json()
+        if data.get("code") != 0:
+            raise RuntimeError(f"回填失败（已写 {done} 条）：{data}")
+        done += len(chunk)
+    return done
 
 
 def get_person_name(fields, field_name):
@@ -255,26 +314,54 @@ def main():
     else:
         lines.append("✅ 所有人完成度均达到预期进度")
 
-    # ===== 检查二：各发布日期抽检完成度（兼容文本/多选两种字段类型）=====
-    tag_records = defaultdict(list)
-    for r in records:
-        fields = r["fields"]
-        raw = fields.get(FIELD_TAG)
-        if isinstance(raw, list):  # 多选字段
-            tags = [v.get("text", "") if isinstance(v, dict) else str(v) for v in raw]
-        else:  # 文本字段（历史表兼容）
-            tag_str = get_text_value(fields, FIELD_TAG)
-            tags = [t.strip() for t in tag_str.split(",") if t.strip()]
-        for tag in tags:
-            if tag:
-                tag_records[tag].append(fields)
+    # ===== 检查二：各次发版的抽检完成度 =====
+    # 一个月多次发版，结果各自记在"第N次发版-Mac/iPhone结果"列里，互不覆盖
+    field_names = get_table_field_names(token, BLIND_TEST_APP_TOKEN, table_id)
+    rounds = get_month_releases(token, now.year, now.month)
+    backfill_updates = []
 
-    if tag_records:
-        lines.append("📦 各版本抽检完成度（完成数/总数，括号内为发现问题数）：")
-        for tag, fields_list in sorted(tag_records.items()):
-            done = sum(1 for f in fields_list if is_case_done(f))
-            tag_issues = sum(1 for f in fields_list if is_case_done(f) and has_issue(f))
-            lines.append(f"- {tag}：{done}/{len(fields_list)}（发现问题 {tag_issues} 条）")
+    round_lines = []
+    for round_no, version_text, release_date in rounds:
+        mac_field = ROUND_MAC_FIELD.format(n=round_no)
+        iphone_field = ROUND_IPHONE_FIELD.format(n=round_no)
+        if mac_field not in field_names and iphone_field not in field_names:
+            continue   # 这一轮还没开始打标
+
+        scope = done = issues = 0
+        for r in records:
+            fields = r["fields"]
+            mac = get_select_value(fields, mac_field).strip()
+            iphone = get_select_value(fields, iphone_field).strip()
+            if not mac and not iphone:
+                continue   # 不在本轮抽检范围
+            scope += 1
+            mac_done = mac not in RESULT_PENDING_VALUES
+            iphone_done = iphone not in RESULT_PENDING_VALUES
+            if mac_done and iphone_done:
+                done += 1
+                if mac == "不通过" or iphone == "不通过":
+                    issues += 1
+            # 本轮验过的结果回填到基础列（基础列为空时才写），省得同一条填两遍
+            if BACKFILL:
+                write = {}
+                if mac_done and not is_result_done(fields, FIELD_MAC_RESULT):
+                    write[FIELD_MAC_RESULT] = mac
+                if iphone_done and not is_result_done(fields, FIELD_IPHONE_RESULT):
+                    write[FIELD_IPHONE_RESULT] = iphone
+                if write:
+                    backfill_updates.append({"record_id": r["record_id"], "fields": write})
+
+        pct = done / scope * 100 if scope else 0
+        round_lines.append(f"- 第{round_no}次发版（{version_text}，{release_date:%m-%d}）："
+                           f"{done}/{scope}（{pct:.0f}%，发现问题 {issues} 条）")
+
+    if round_lines:
+        lines.append("📦 本月各次发版抽检完成度：")
+        lines.extend(round_lines)
+
+    if backfill_updates:
+        written = batch_update(token, BLIND_TEST_APP_TOKEN, table_id, backfill_updates)
+        print(f"已把 {written} 条抽检结果回填到基础验收结果列")
 
     text = "\n".join(lines)
     send_to_beehive(text)

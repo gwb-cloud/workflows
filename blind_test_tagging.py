@@ -47,6 +47,12 @@ BLIND_TEST_APP_TOKEN = "FnFab3FDKa0JU6sqa19cDVpHnM7"
 FIELD_MODULE = "二级模块"
 FIELD_TAG = "本次抽检版本号"
 
+# 一个月有多次发版，每次抽检的结果要分开记，所以按"本月第几次发版"建独立的结果列。
+# 月度表每月新建，所以列名里不带月份；改这里的模板要同步改飞书表里已有的列名。
+ROUND_MAC_FIELD = "第{n}次发版-Mac结果"
+ROUND_IPHONE_FIELD = "第{n}次发版-iPhone结果"
+ROUND_RESULT_OPTIONS = [{"name": "待验收"}, {"name": "通过"}, {"name": "不通过"}]
+
 TARGET_DATE_STR = os.environ.get("TARGET_RELEASE_DATE", "")
 
 # 关键词匹配数量不够时，从未验证用例里随机补齐到这个数
@@ -263,6 +269,42 @@ def belongs_to_release(online_date, prev_release_date, target_date):
     return prev_release_date < online_date <= target_date
 
 
+def release_round(releases, target_date):
+    """本月第几次发版：当月所有发布日期排序后的序号（11/12→1，11/26→2）"""
+    same_month = sorted(d for d in releases
+                        if d.year == target_date.year and d.month == target_date.month)
+    return same_month.index(target_date) + 1 if target_date in same_month else 1
+
+
+def get_fields(token, app_token, table_id):
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+    data = api("GET", url, token=token, params={"page_size": 100})
+    if data.get("code") != 0:
+        raise RuntimeError(f"拉取字段失败：{data}")
+    return data["data"]["items"]
+
+
+def create_field(token, app_token, table_id, field_name, field_type, property_=None):
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+    body = {"field_name": field_name, "type": field_type}
+    if property_:
+        body["property"] = property_
+    data = api("POST", url, token=token, body=body)
+    if data.get("code") != 0:
+        raise RuntimeError(f"创建字段「{field_name}」失败：{data}")
+    print(f"已创建本轮结果列「{field_name}」")
+
+
+def ensure_round_fields(token, app_token, table_id, round_no):
+    """确保"第N次发版"的两列存在，没有就建（单选：待验收/通过/不通过）"""
+    names = [ROUND_MAC_FIELD.format(n=round_no), ROUND_IPHONE_FIELD.format(n=round_no)]
+    existing = {f["field_name"] for f in get_fields(token, app_token, table_id)}
+    for name in names:
+        if name not in existing:
+            create_field(token, app_token, table_id, name, 3, {"options": ROUND_RESULT_OPTIONS})
+    return names
+
+
 def workdays_between(start_date, end_date):
     """start_date 到 end_date（含首尾）之间有几个工作日"""
     if end_date < start_date:
@@ -313,7 +355,9 @@ def main():
 
     tag_value = "/".join(releases[target_date])
     prev_release_date = find_previous_release_date(releases, target_date)
-    print(f"目标发布：{tag_value}（{target_date}），上一次发布：{prev_release_date or '无'}")
+    round_no = release_round(releases, target_date)
+    print(f"目标发布：{tag_value}（{target_date}），本月第 {round_no} 次发版，"
+          f"上一次发布：{prev_release_date or '无'}")
 
     target_table_name = f"M{now.month}验收表"
     blind_table_id = find_table_by_name(token, BLIND_TEST_APP_TOKEN, target_table_name)
@@ -379,15 +423,23 @@ def main():
     if field_type == 4:
         ensure_multi_select_option(token, BLIND_TEST_APP_TOKEN, blind_table_id, field_id, tag_value)
 
+    # 本轮专属的结果列，抽中的行先置为"待验收"，验收人一眼看出本轮要验哪些
+    mac_field, iphone_field = ensure_round_fields(token, BLIND_TEST_APP_TOKEN, blind_table_id, round_no)
+
     updates = []
     for record_id in sorted(to_tag):
-        tags = get_existing_tags(records_by_id[record_id], field_type)
+        fields = records_by_id[record_id]
+        tags = get_existing_tags(fields, field_type)
         tags.add(tag_value)
-        value = sorted(tags) if field_type == 4 else ",".join(sorted(tags))
-        updates.append({"record_id": record_id, "fields": {FIELD_TAG: value}})
+        to_write = {FIELD_TAG: sorted(tags) if field_type == 4 else ",".join(sorted(tags))}
+        for name in (mac_field, iphone_field):
+            if not get_select_value(fields, name).strip():
+                to_write[name] = "待验收"
+        updates.append({"record_id": record_id, "fields": to_write})
 
     batch_update(token, BLIND_TEST_APP_TOKEN, blind_table_id, updates)
-    print(f"本次新打标 {len(to_tag)} 条，{tag_value} 累计抽检 {len(selected)} 条")
+    print(f"本次新打标 {len(to_tag)} 条，{tag_value}（第{round_no}次发版）累计抽检 {len(selected)} 条，"
+          f"结果填在「{mac_field}」「{iphone_field}」两列")
 
 
 if __name__ == "__main__":
