@@ -91,6 +91,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **每月预建 3 轮**：`monthly_blind_test_setup.py` 建表时就把 3 轮的结果列+截图列一次建齐（`PREBUILD_ROUNDS`）；超过 3 次发版由 Webb 手动建，脚本只认已存在的列。打标时 `ensure_round_fields()` 也会补建缺的列，两边都幂等。
 - **能自动判出来的"放错"**：Mac 列里是竖图 / iPhone 列里是横图（按下载到的真实宽高判断）、同一张图被粘在 ≥3 处、放的不是图片文件。
 - **判不出来的**：内容完全不相关的图。几何特征看不出来，要接视觉模型才行，目前没做。
+- **校验范围 `SCOPE`**：`round`（默认）只看当前这一轮发版的列——规则是 2026-11 才上的，之前填的几千条结果都没有截图，全量发会刷屏；`all` 是总验收列+所有轮次，等存量补齐后改成这个。
+- **@ 到人**：`PERSON_BEEHIVE_ID` 的 key 是蜂巢显示名，飞书验收人姓名对不上的在 `NAME_ALIAS` 里映射（李雨纯→雨纯、张梦成→梦成 Rhys、Lexia→乐夏）。**@ 不到的人不要在正文里写 `@`**，否则正文里 @ 的个数跟 `atUserList` 对不上，蜂巢会把后面所有人的 @ 渲染错位。
 
 ### 盲测进度的统计口径
 

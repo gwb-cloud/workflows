@@ -35,6 +35,15 @@ BEEHIVE_WEBHOOK = os.environ.get("BEEHIVE_WEBHOOK", "")
 
 BLIND_TEST_APP_TOKEN = "FnFab3FDKa0JU6sqa19cDVpHnM7"
 
+# 节点更新总表：用来算"本月第几次发版"，跟 blind_test_tagging.py 一致
+NODE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
+NODE_TABLE_ID = "tblSDaRAkltfVtx6"
+FIELD_NODE_RELEASE_DATE = "版本发布日期"
+
+# 校验范围：round = 只校验当前这一轮发版的列（默认，刚上规则时历史欠账太多）；
+#          all  = 总验收列 + 所有轮次一起校验
+SCOPE = os.environ.get("SCOPE", "round").strip().lower()
+
 FIELD_OWNER = "验收人"
 
 
@@ -68,25 +77,28 @@ STATE_FILE = "screenshot_state.json"
 DRY_RUN = os.environ.get("DRY_RUN", "").strip().lower() == "true"
 FORCE_SEND = os.environ.get("FORCE_SEND", "").strip().lower() == "true"
 
-# 蜂巢账号，用于 @ 到人。飞书里的姓名跟蜂巢显示名对不上的，在 NAME_ALIAS 里对一下
+# 蜂巢账号（key 是蜂巢里的显示名），用于 @ 到人
 PERSON_BEEHIVE_ID = {
-    "Webb": {"id": "ouv4qovzpupe9m", "nickname": "Webb"},
-    "爱德": {"id": "ouv4qovznoxoxq", "nickname": "爱德"},
-    "雨纯": {"id": "ouv4qovzoc6cad", "nickname": "雨纯"},
-    "苏宸": {"id": "ouvkmtuntg5xpk", "nickname": "苏宸"},
-    "可大力": {"id": "ouv4qovzlarm8d", "nickname": "可大力"},
-    "陈杨": {"id": "ouviua2rcuub5e", "nickname": "秦汉"},
-    "李静": {"id": "ouvcofw0bgs9hf", "nickname": "李静"},
-    "Rhys": {"id": "ouv4qovznsatvc", "nickname": "Rhys"},
-    "Crisley": {"id": "ouv4qow0vt3ksn", "nickname": "Crisley"},
-    "Yvonne": {"id": "ouv4qovzmwpkuy", "nickname": "Yvonne"},
-    "唐炜": {"id": "ouv4qovznbncqw", "nickname": "唐炜"},
-    "严光": {"id": "ouvgwgfyt1elue", "nickname": "严光"},
+    "郭文博": "ouv4qovzpupe9m",
+    "爱德": "ouv4qovznoxoxq",
+    "雨纯": "ouv4qovzoc6cad",
+    "段苏宸": "ouvkmtuntg5xpk",
+    "可大力": "ouv4qovzlarm8d",
+    "秦汉": "ouviua2rcuub5e",
+    "李静": "ouvcofw0bgs9hf",
+    "梦成 Rhys": "ouv4qovznsatvc",
+    "Crisley": "ouv4qow0vt3ksn",
+    "Yvonne": "ouv4qovzmwpkuy",
+    "唐炜": "ouv4qovznbncqw",
+    "严光": "ouvgwgfyt1elue",
+    "乐夏": "ouvwzhogat6shz",
 }
-# 飞书验收人姓名 → PERSON_BEEHIVE_ID 的 key
+# 飞书验收人姓名 → 上面的 key（飞书名和蜂巢显示名不一致的才要写）
 NAME_ALIAS = {
-    "郭文博": "Webb",
     "李雨纯": "雨纯",
+    "张梦成": "梦成 Rhys",
+    "Lexia": "乐夏",
+    "陈杨": "秦汉",
 }
 
 RETRYABLE_CODES = {1254290, 1254291, 1254607, 1255001, 1255040, 99991400}
@@ -243,7 +255,7 @@ def download_size(token, file_token):
 
 
 def beehive_id(name):
-    """飞书姓名 → 蜂巢账号信息，查不到返回 None"""
+    """飞书姓名 → 蜂巢 userId，查不到返回 None"""
     return PERSON_BEEHIVE_ID.get(NAME_ALIAS.get(name, name))
 
 
@@ -262,11 +274,10 @@ def beehive_send(text, at_names):
         return
     at_ids, at_users_info = [], []
     for name in at_names:
-        info = beehive_id(name)
-        if info:
-            at_ids.append(info["id"])
-            at_users_info.append({"atUserID": info["id"],
-                                  "groupNickname": info.get("nickname", NAME_ALIAS.get(name, name))})
+        user_id = beehive_id(name)
+        if user_id:
+            at_ids.append(user_id)
+            at_users_info.append({"atUserID": user_id, "groupNickname": NAME_ALIAS.get(name, name)})
         else:
             print(f"⚠️ 没找到「{name}」的蜂巢账号，请补 PERSON_BEEHIVE_ID / NAME_ALIAS")
     if at_ids:
@@ -278,17 +289,42 @@ def beehive_send(text, at_names):
     print(f"发送结果：{resp.status_code} {resp.text}")
 
 
-def build_pairs(field_names):
-    """返回 [(结果列, 截图列, 端, 分组名)]，只保留表里真实存在的列"""
+def parse_date(ms_timestamp):
+    """飞书日期字段换算成北京时间后固定停在23:00，需要再加1小时才能拿到正确日期"""
+    if not ms_timestamp:
+        return None
+    return datetime.fromtimestamp(ms_timestamp / 1000, tz=BEIJING_TZ) + timedelta(hours=1)
+
+
+def current_round(token, now):
+    """当前是本月第几次发版：当月发布日期排序后，取今天所属的那一轮
+    （今天还没到第一次发布就算第1轮，过了最后一次就算最后一轮）"""
+    dates = sorted({d for d in (parse_date(r.get("fields", {}).get(FIELD_NODE_RELEASE_DATE))
+                                for r in get_all_records(token, NODE_APP_TOKEN, NODE_TABLE_ID))
+                    if d and d.year == now.year and d.month == now.month})
+    if not dates:
+        return None
+    today = now.date()
+    for i, d in enumerate(dates):
+        if today <= d.date():
+            return i + 1
+    return len(dates)
+
+
+def build_pairs(field_names, only_round=None):
+    """返回 [(结果列, 截图列, 端, 分组名)]，只保留表里真实存在的列。
+    only_round 不为空时，只校验那一轮的列，总验收列和其它轮次都不看"""
     pairs = []
-    for result_name, shot_name, platform in BASE_PAIRS:
-        r = resolve(field_names, result_name)
-        s = resolve(field_names, shot_name)
-        if r and s:
-            pairs.append((r, s, platform, "总验收"))
-        elif r and not s:
-            print(f"⚠️ 有结果列「{r}」但找不到对应的截图列「{shot_name}」，这一组跳过")
-    for n in range(1, MAX_ROUNDS + 1):
+    if only_round is None:
+        for result_name, shot_name, platform in BASE_PAIRS:
+            r = resolve(field_names, result_name)
+            s = resolve(field_names, shot_name)
+            if r and s:
+                pairs.append((r, s, platform, "总验收"))
+            elif r and not s:
+                print(f"⚠️ 有结果列「{r}」但找不到对应的截图列「{shot_name}」，这一组跳过")
+    rounds = [only_round] if only_round else range(1, MAX_ROUNDS + 1)
+    for n in rounds:
         for platform in ("Mac", "iPhone"):
             r = resolve(field_names, ROUND_RESULT[platform].format(n=n))
             s = resolve(field_names, ROUND_SHOT[platform].format(n=n))
@@ -311,12 +347,20 @@ def main():
     if not table_id:
         raise RuntimeError(f"没找到 {table_name}")
 
+    only_round = None
+    if SCOPE == "round":
+        only_round = current_round(token, now)
+        if only_round is None:
+            print("节点更新总表里本月没有填发布日期，算不出当前是第几次发版，跳过")
+            return
+
     field_names = get_field_names(token, BLIND_TEST_APP_TOKEN, table_id)
-    pairs = build_pairs(field_names)
+    pairs = build_pairs(field_names, only_round)
     if not pairs:
-        print("没有任何「结果列 + 截图列」配对，跳过")
+        print(f"没有任何「结果列 + 截图列」配对（SCOPE={SCOPE}），跳过")
         return
-    print(f"{table_name}：参与校验的列 {len(pairs)} 组 → "
+    scope_desc = f"只看第{only_round}次发版" if only_round else "总验收 + 全部轮次"
+    print(f"{table_name}：校验范围 {scope_desc}，参与的列 {len(pairs)} 组 → "
           + "、".join(f"{g}/{p}" for _r, _s, p, g in pairs))
 
     records = get_all_records(token, BLIND_TEST_APP_TOKEN, table_id)
@@ -387,7 +431,7 @@ def main():
     # ---------- 拼报告 ----------
     miss_total = sum(sum(v.values()) for v in missing.values())
     wrong_total = sum(len(v) for v in wrong.values())
-    lines = [f"📸 盲测截图校验｜{table_name}｜{now:%m-%d}",
+    lines = [f"📸 盲测截图校验｜{table_name}｜{now:%m-%d}｜{scope_desc}",
              f"已填截图 {filled_total} 处，本次实际下载检查 {downloaded} 张"]
     at_names = []
 
