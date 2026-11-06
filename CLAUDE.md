@@ -64,6 +64,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `blind_test_progress_check.py` | 周一~周五19点 | 时间进度基准线（本月第几天/总天数）vs 实际完成度：整体（Mac/iPhone 分端，带今日新增）；落后人员只列"姓名：进度 X%"；本月各次发版的抽检完成度（按第N次发版的独立结果列统计）+ 抽检结果回填基础列。周六周日不发（cron 限定 1-5，脚本里按北京时区再兜一层，手动触发传 force_send=true 可强制发） | CLI 高权限 | `BEEHIVE_WEBHOOK_P2_WORKFLOW`（上线流程验收群） |
 | `blind_test_table_cleanup.py` | 手动 | 原始目标表增删用例后，按「目标」文本双向对账：删掉验收表里源表已没有的记录（有数据也删，同名多条时优先留已填结果/已打标的），并把源表新增的用例补进来（验收人给当前条数最少的人，二级模块缺的选项自动补）。默认 DRY RUN，`confirm=yes` 才执行，另有 `max_delete`/`max_create` 安全阀 | CLI 高权限 | 不发消息 |
 | `blind_test_mainflow_sync.py` | 手动 | 按「目标」把源表「是否主流程」同步到当月验收表（目标表没这个字段就照源表类型新建），并把主流程用例的「本次抽检版本号」改成只有 `TAG_VALUES` 指定的值（非主流程行不动）。默认 DRY RUN，`confirm=yes` 才写表 | CLI 高权限 | 不发消息 |
+| `issue_field_audit.py` | 每周一10点 | 验收问题表（`OR5ubORn3atfo3szLSTcbnVdnTf` / `tbl3vBsukTCg1yrn`）字段完整性巡检：统计每一列的空值条数和占比，`KEY_FIELDS` 里的列单独列成"关键字段缺失"。自动列（自动编号/创建时间/修改时间/修改人/查找引用/公式）跳过，它们空着不是人的问题 | CLI 高权限 | `BEEHIVE_WEBHOOK`（先用测试群） |
 | `blind_test_screenshot_check.py` | 周一/三/五18点 | 截图校验：结果填了「通过」「不通过」就必须有对应截图。报 ①漏填（谁、多少处、哪一组）②疑似放错（Mac 列放竖图/iPhone 列放横图、同一张图重复粘、放的不是图片），按验收人 @ 到人。图片尺寸缓存在 `screenshot_state.json`，同一张图只下载一次 | CLI 高权限 | `BEEHIVE_WEBHOOK`（先用测试群） |
 | `blind_test_round_migrate.py` | 手动 | 当月验收表的「分轮结果列」准备/迁移：先体检（列结构、条数、「本次抽检版本号」分布、各列填写情况），按节点更新总表当月发布次数补齐 `第{n}次发版-Mac/iPhone结果`，并可把基础结果列里已有的结果迁进指定某一轮（已有值的列不覆盖，本轮抽中未验的置「待验收」）。默认 DRY RUN，`confirm=yes` 才写表，另有 `max_write` 安全阀 | CLI 高权限 | 不发消息 |
 | `test_webhook.py` | 手动 | 只测 webhook 连通性 | - | `BEEHIVE_WEBHOOK` |
