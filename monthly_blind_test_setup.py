@@ -31,26 +31,50 @@ SOURCE_TABLE_ID = "tbl46z8GYP5HN1MJ"      # 原始目标表（盲测用例库）
 FIELD_SOURCE_TARGET = "目标"
 FIELD_SOURCE_MODULE = "二级模块"
 
-# 新建月度验收表的字段结构。type 编号是飞书官方定义：1=文本 3=单选 5=日期 11=人员
-# 如果建表报错提示字段类型不对，多半是这几个编号需要按报错信息调整
-# 新建月度验收表的字段结构。type 编号是飞书官方定义：1=文本 3=单选 4=多选 5=日期 11=人员
+# 新建月度验收表的字段结构。type 编号是飞书官方定义：
+# 1=文本 3=单选 4=多选 11=人员 17=附件 1002=修改时间
 # 如果建表报错提示字段类型不对，多半是这几个编号需要按报错信息调整
 # "二级模块"的具体选项列表是运行时从原始目标表动态读取的，见 build_new_table_fields()
+
+RESULT_OPTIONS = [{"name": "待验收"}, {"name": "通过"}, {"name": "不通过"},
+                  {"name": "不涉及或无此需求"}]
+
+# 一个月预建几次发版的列。超出的由 Webb 手动建，三个脚本都只认已经存在的列
+# （blind_test_tagging.py / blind_test_progress_check.py / blind_test_screenshot_check.py）
+PREBUILD_ROUNDS = 3
+
+# 列名模板要跟上面三个脚本保持一致，改名得一起改，并同步飞书表里已有的列
+ROUND_MAC_FIELD = "第{n}次发版-Mac结果"
+ROUND_IPHONE_FIELD = "第{n}次发版-iPhone结果"
+ROUND_MAC_SHOT = "第{n}次发版-Mac截图"
+ROUND_IPHONE_SHOT = "第{n}次发版-iPhone截图"
+
+
 def build_new_table_fields(module_options):
-    return [
+    fields = [
         {"field_name": "目标", "type": 1},
         {"field_name": "二级模块", "type": 3, "property": {"options": module_options}},
+        {"field_name": "是否主流程", "type": 3, "property": {"options": [
+            {"name": "是"}, {"name": "否"}
+        ]}},
         {"field_name": "验收人", "type": 11},
-        {"field_name": "iPhone验收结果", "type": 3, "property": {"options": [
-            {"name": "待验收"}, {"name": "通过"}, {"name": "不通过"}
-        ]}},
-        {"field_name": "Mac验收结果", "type": 3, "property": {"options": [
-            {"name": "待验收"}, {"name": "通过"}, {"name": "不通过"}
-        ]}},
-        {"field_name": "iPhone验收时间", "type": 5},
-        {"field_name": "Mac验收时间", "type": 5},
+        {"field_name": "iPhone验收结果", "type": 3, "property": {"options": RESULT_OPTIONS}},
+        {"field_name": "Mac验收结果", "type": 3, "property": {"options": RESULT_OPTIONS}},
+        # 结果填了通过/不通过就必须配截图，校验见 blind_test_screenshot_check.py
+        {"field_name": "iPhone截图", "type": 17},
+        {"field_name": "Mac截图", "type": 17},
+        {"field_name": "iPhone验收时间", "type": 1002},   # 修改时间，自动填，不用人维护
+        {"field_name": "Mac验收时间", "type": 1002},
         {"field_name": "本次抽检版本号", "type": 4},  # 多选，支持一条用例同时被多个发布日期标记
     ]
+    for n in range(1, PREBUILD_ROUNDS + 1):
+        fields += [
+            {"field_name": ROUND_MAC_FIELD.format(n=n), "type": 3, "property": {"options": RESULT_OPTIONS}},
+            {"field_name": ROUND_MAC_SHOT.format(n=n), "type": 17},
+            {"field_name": ROUND_IPHONE_FIELD.format(n=n), "type": 3, "property": {"options": RESULT_OPTIONS}},
+            {"field_name": ROUND_IPHONE_SHOT.format(n=n), "type": 17},
+        ]
+    return fields
 
 
 def get_tenant_token():

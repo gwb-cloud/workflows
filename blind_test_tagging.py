@@ -51,7 +51,11 @@ FIELD_TAG = "本次抽检版本号"
 # 月度表每月新建，所以列名里不带月份；改这里的模板要同步改飞书表里已有的列名。
 ROUND_MAC_FIELD = "第{n}次发版-Mac结果"
 ROUND_IPHONE_FIELD = "第{n}次发版-iPhone结果"
-ROUND_RESULT_OPTIONS = [{"name": "待验收"}, {"name": "通过"}, {"name": "不通过"}]
+# 结果填了通过/不通过就得配截图，校验见 blind_test_screenshot_check.py
+ROUND_MAC_SHOT = "第{n}次发版-Mac截图"
+ROUND_IPHONE_SHOT = "第{n}次发版-iPhone截图"
+ROUND_RESULT_OPTIONS = [{"name": "待验收"}, {"name": "通过"}, {"name": "不通过"},
+                        {"name": "不涉及或无此需求"}]
 
 TARGET_DATE_STR = os.environ.get("TARGET_RELEASE_DATE", "")
 
@@ -296,13 +300,18 @@ def create_field(token, app_token, table_id, field_name, field_type, property_=N
 
 
 def ensure_round_fields(token, app_token, table_id, round_no):
-    """确保"第N次发版"的两列存在，没有就建（单选：待验收/通过/不通过）"""
-    names = [ROUND_MAC_FIELD.format(n=round_no), ROUND_IPHONE_FIELD.format(n=round_no)]
-    existing = {f["field_name"] for f in get_fields(token, app_token, table_id)}
-    for name in names:
-        if name not in existing:
+    """确保"第N次发版"的结果列和截图列都存在，没有就建。
+    列名匹配去掉空白，飞书里手建的列名经常多一个空格（"Mac 截图"），不能当成缺列又建一遍"""
+    results = [ROUND_MAC_FIELD.format(n=round_no), ROUND_IPHONE_FIELD.format(n=round_no)]
+    shots = [ROUND_MAC_SHOT.format(n=round_no), ROUND_IPHONE_SHOT.format(n=round_no)]
+    existing = {"".join(f["field_name"].split()) for f in get_fields(token, app_token, table_id)}
+    for name in results:
+        if "".join(name.split()) not in existing:
             create_field(token, app_token, table_id, name, 3, {"options": ROUND_RESULT_OPTIONS})
-    return names
+    for name in shots:
+        if "".join(name.split()) not in existing:
+            create_field(token, app_token, table_id, name, 17)   # 17=附件
+    return results
 
 
 def workdays_between(start_date, end_date):

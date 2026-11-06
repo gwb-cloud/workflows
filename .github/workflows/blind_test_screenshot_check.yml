@@ -1,0 +1,46 @@
+name: 盲测截图校验
+
+on:
+  schedule:
+    - cron: '0 10 * * 1,3,5'   # UTC 10点 = 北京时间18点，周一/三/五
+  workflow_dispatch:
+    inputs:
+      force_send:
+        description: '非周一三五也强制执行，填 true'
+        required: false
+        default: ''
+      dry_run:
+        description: '只打印报告不发群，填 true'
+        required: false
+        default: ''
+      max_download:
+        description: '单次最多下载多少张图做尺寸检查（默认300）'
+        required: false
+        default: ''
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests pillow
+      - run: python blind_test_screenshot_check.py
+        env:
+          FEISHU_APP_ID_CLI: ${{ secrets.FEISHU_APP_ID_CLI }}
+          FEISHU_APP_SECRET_CLI: ${{ secrets.FEISHU_APP_SECRET_CLI }}
+          BEEHIVE_WEBHOOK: ${{ secrets.BEEHIVE_WEBHOOK }}
+          FORCE_SEND: ${{ github.event.inputs.force_send }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          MAX_DOWNLOAD: ${{ github.event.inputs.max_download }}
+      - name: 提交图片尺寸缓存
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add screenshot_state.json
+          git diff --staged --quiet || git commit -m "更新截图尺寸缓存 $(date +'%Y-%m-%d')"
+          git push

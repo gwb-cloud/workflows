@@ -64,6 +64,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `blind_test_progress_check.py` | 周一~周五19点 | 时间进度基准线（本月第几天/总天数）vs 实际完成度：整体（Mac/iPhone 分端，带今日新增）；落后人员只列"姓名：进度 X%"；本月各次发版的抽检完成度（按第N次发版的独立结果列统计）+ 抽检结果回填基础列。周六周日不发（cron 限定 1-5，脚本里按北京时区再兜一层，手动触发传 force_send=true 可强制发） | CLI 高权限 | `BEEHIVE_WEBHOOK_P2_WORKFLOW`（上线流程验收群） |
 | `blind_test_table_cleanup.py` | 手动 | 原始目标表增删用例后，按「目标」文本双向对账：删掉验收表里源表已没有的记录（有数据也删，同名多条时优先留已填结果/已打标的），并把源表新增的用例补进来（验收人给当前条数最少的人，二级模块缺的选项自动补）。默认 DRY RUN，`confirm=yes` 才执行，另有 `max_delete`/`max_create` 安全阀 | CLI 高权限 | 不发消息 |
 | `blind_test_mainflow_sync.py` | 手动 | 按「目标」把源表「是否主流程」同步到当月验收表（目标表没这个字段就照源表类型新建），并把主流程用例的「本次抽检版本号」改成只有 `TAG_VALUES` 指定的值（非主流程行不动）。默认 DRY RUN，`confirm=yes` 才写表 | CLI 高权限 | 不发消息 |
+| `blind_test_screenshot_check.py` | 周一/三/五18点 | 截图校验：结果填了「通过」「不通过」就必须有对应截图。报 ①漏填（谁、多少处、哪一组）②疑似放错（Mac 列放竖图/iPhone 列放横图、同一张图重复粘、放的不是图片），按验收人 @ 到人。图片尺寸缓存在 `screenshot_state.json`，同一张图只下载一次 | CLI 高权限 | `BEEHIVE_WEBHOOK`（先用测试群） |
 | `blind_test_round_migrate.py` | 手动 | 当月验收表的「分轮结果列」准备/迁移：先体检（列结构、条数、「本次抽检版本号」分布、各列填写情况），按节点更新总表当月发布次数补齐 `第{n}次发版-Mac/iPhone结果`，并可把基础结果列里已有的结果迁进指定某一轮（已有值的列不覆盖，本轮抽中未验的置「待验收」）。默认 DRY RUN，`confirm=yes` 才写表，另有 `max_write` 安全阀 | CLI 高权限 | 不发消息 |
 | `test_webhook.py` | 手动 | 只测 webhook 连通性 | - | `BEEHIVE_WEBHOOK` |
 | `diagnose_at_users.py` | 手动 | 逐人发一条 @ 测试消息，排查哪个人的蜂巢 ID 有问题 | - | `BEEHIVE_WEBHOOK_YANSHOU` |
@@ -81,6 +82,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **结果回填**：`blind_test_progress_check.py` 会把本轮已填的结果回填到基础的 `Mac验收结果`/`iPhone验收结果`（**仅当基础列为空**），避免同一条填两遍、同时让全量覆盖进度照常累加。`BACKFILL=false` 可关掉。
 - 改列名模板要**三个脚本一起改**（`ROUND_MAC_FIELD` / `ROUND_IPHONE_FIELD`，打标/进度/迁移），并同步飞书表里已有的列。
 - **切换到这套口径时**（或某个月的表是老结构、已经有抽检在跑），手动跑 `blind_test_round_migrate.py` 补列+迁移。往后每月新表由打标脚本自动建列，不用再跑。
+
+### 截图的要求与校验口径
+
+- **什么时候必须有截图**：某一端的结果填了「通过」或「不通过」→ 对应截图列必须有图；「待验收」「不涉及或无此需求」和空值都不要求。
+- **列的对应关系**：`Mac验收结果`↔`Mac截图`、`iPhone验收结果`↔`iPhone截图`，每轮发版同理 `第{n}次发版-Mac结果`↔`第{n}次发版-Mac截图`。
+- **列名带空格要容错**：飞书里手建的列经常多一个空格（`Mac 截图`、`第3次发版-Mac 截图`）。所有脚本匹配列名时都先去掉空白（`norm()` / `"".join(name.split())`），**不要因为对不上就再建一列**。
+- **每月预建 3 轮**：`monthly_blind_test_setup.py` 建表时就把 3 轮的结果列+截图列一次建齐（`PREBUILD_ROUNDS`）；超过 3 次发版由 Webb 手动建，脚本只认已存在的列。打标时 `ensure_round_fields()` 也会补建缺的列，两边都幂等。
+- **能自动判出来的"放错"**：Mac 列里是竖图 / iPhone 列里是横图（按下载到的真实宽高判断）、同一张图被粘在 ≥3 处、放的不是图片文件。
+- **判不出来的**：内容完全不相关的图。几何特征看不出来，要接视觉模型才行，目前没做。
 
 ### 盲测进度的统计口径
 
