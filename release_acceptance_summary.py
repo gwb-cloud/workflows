@@ -37,6 +37,9 @@ BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_P2_WORKFLOW"]
 # 节点更新总表：发布日期的唯一数据源
 NODE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
 NODE_TABLE_ID = "tblSDaRAkltfVtx6"
+# 消息末尾附的链接，方便大家直接点进去看/改发布节点
+NODE_TABLE_URL = ("https://pcnpuds47gj5.feishu.cn/base/"
+                  f"{NODE_APP_TOKEN}?table={NODE_TABLE_ID}&view=vew5pG4bqr")
 FIELD_NODE_VERSION = "版本号"
 FIELD_NODE_RELEASE_DATE = "版本发布日期"
 
@@ -443,6 +446,8 @@ def main():
             lines.append(f"- {issue_type}：{count}个")
     else:
         lines.append("- 无")
+
+    lines.append(f"\n📅 发布节点表：{NODE_TABLE_URL}")
 
     text = "\n".join(lines)
     send_to_beehive(text, at_names=at_names_in_order)
