@@ -1,4 +1,4 @@
-name: 验收问题表字段巡检
+name: 问题池规则巡检
 
 on:
   schedule:
@@ -9,8 +9,8 @@ on:
         description: '只打印不发群，填 true'
         required: false
         default: ''
-      key_fields:
-        description: '重点提醒的字段，逗号分隔；留空用默认的那几个'
+      max_keys:
+        description: '每条规则最多列几个主键（默认12）'
         required: false
         default: ''
 
@@ -29,4 +29,4 @@ jobs:
           FEISHU_APP_SECRET_CLI: ${{ secrets.FEISHU_APP_SECRET_CLI }}
           BEEHIVE_WEBHOOK: ${{ secrets.BEEHIVE_WEBHOOK }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
-          KEY_FIELDS: ${{ github.event.inputs.key_fields }}
+          MAX_KEYS: ${{ github.event.inputs.max_keys }}
