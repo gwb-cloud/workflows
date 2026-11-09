@@ -31,6 +31,12 @@ NAME_ALIAS = {
     "张梦成": "梦成 Rhys",
     "Lexia": "乐夏",
     "陈杨": "秦汉",
+    # 节点更新总表 / 分工表里的写法，跟验收表不是一套。2026-11-09 从
+    # check_and_notify.py 和 release_acceptance_summary.py 各自的名单合并过来，
+    # 那两份都漏了乐夏，合并后自动补上。
+    "Webb": "郭文博",
+    "苏宸": "段苏宸",
+    "Rhys": "梦成 Rhys",
 }
 
 

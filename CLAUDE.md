@@ -226,6 +226,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 有编号＝盲测来的，没有＝不是，来源可以推出来，多一个字段只会多一处填错和不同步。
 （「问题发现阶段」是 Zelto内测/对客正式，那是环境不是来源，两者正交。）
 
+## 人员名单只有一份：beehive_people.py
+
+2026-11-09 合并。以前 `check_and_notify.py` 和 `release_acceptance_summary.py`
+各存一份 12 人的硬编码名单，**两份都漏了乐夏**，而且改一处另一处不会跟着动。
+现在都从 `beehive_people` 取 `beehive_id()` / `display_name()`。
+
+- 节点总表/分工表用的是 `Webb`/`苏宸`/`Rhys` 这套写法，验收表用 `郭文博`/`段苏宸`/
+  `张梦成`，两套都进了 `NAME_ALIAS`，查得到。
+- **副作用**：这两个脚本发出来的 @ 从 `@Webb` 变成 `@郭文博`（`苏宸`→`段苏宸`，
+  `Rhys`→`梦成 Rhys`）。两种写法蜂巢都能匹配，只要正文和 `groupNickname` 一致。
+
 ## 通知路由：哪条消息发到哪个机器人
 
 2026-11-09 重排。**验收类消息全部收进验收群**，靠不同的 webhook（在蜂巢里显示成

@@ -15,6 +15,7 @@
 import requests
 import os
 from datetime import datetime, timedelta
+from beehive_people import beehive_id, display_name
 
 # ========== 配置区：改成你自己的实际值 ==========
 
@@ -66,29 +67,16 @@ ITEM_OWNERS = {
     "帮助文档 未在24H内更新": ["爱德"],
 }
 
-# 姓名 → 蜂巢账号ID，需要你实际去蜂巢后台/找同事拿到真实ID后填进来
-PERSON_BEEHIVE_ID = {
-    "Webb": {"id": "ouv4qovzpupe9m", "nickname": "Webb"},
-    "爱德": {"id": "ouv4qovznoxoxq", "nickname": "爱德"},
-    "雨纯": {"id": "ouv4qovzoc6cad", "nickname": "雨纯"},
-    "苏宸": {"id": "ouvkmtuntg5xpk", "nickname": "苏宸"},
-    "可大力": {"id": "ouv4qovzlarm8d", "nickname": "可大力"},
-    "陈杨": {"id": "ouviua2rcuub5e", "nickname": "秦汉"},  # 飞书叫陈杨，蜂巢显示名是秦汉
-    "李静": {"id": "ouvcofw0bgs9hf", "nickname": "李静"},
-    "Rhys": {"id": "ouv4qovznsatvc", "nickname": "Rhys"},
-    "Crisley": {"id": "ouv4qow0vt3ksn", "nickname": "Crisley"},
-    "Yvonne": {"id": "ouv4qovzmwpkuy", "nickname": "Yvonne"},
-    "唐炜": {"id": "ouv4qovznbncqw", "nickname": "唐炜"},
-    "严光": {"id": "ouvgwgfyt1elue", "nickname": "严光"},
-}
+# 名单统一在 beehive_people.py 维护。以前这里和 release_acceptance_summary.py
+# 各存一份 12 人的硬编码名单，两份都漏了乐夏，而且改一处另一处不会跟着动。
+# 节点总表用的 Webb/苏宸/Rhys 这套写法已经进了 NAME_ALIAS，查得到。
 
 
 def beehive_nickname(name):
     """正文里写"@XXX"要用蜂巢群里的显示名，必须和 atUsersInfo[].groupNickname 一致，
     否则蜂巢匹配不上、不会渲染成蓝色链接（消息还是会发到人，只是看着像没@到）。
     踩过的例子：飞书叫「陈杨」，蜂巢显示名是「秦汉」。"""
-    info = PERSON_BEEHIVE_ID.get(name) or {}
-    return info.get("nickname", name)
+    return display_name(name)
 
 FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
 
@@ -145,12 +133,12 @@ def send_to_beehive(text, target=DEFAULT_TARGET, at_names=None):
     at_ids = []
     at_users_info = []
     for name in (at_names or []):
-        info = PERSON_BEEHIVE_ID.get(name)
-        if info and info.get("id"):
-            at_ids.append(info["id"])
-            at_users_info.append({"atUserID": info["id"], "groupNickname": info.get("nickname", name)})
+        uid = beehive_id(name)
+        if uid:
+            at_ids.append(uid)
+            at_users_info.append({"atUserID": uid, "groupNickname": display_name(name)})
         else:
-            print(f"⚠️ 未找到 {name} 对应的蜂巢账号信息，这处@可能不会生效，请检查 PERSON_BEEHIVE_ID 配置")
+            print(f"⚠️ 未找到 {name} 对应的蜂巢账号信息，这处@可能不会生效，请在 beehive_people.py 里补 PERSON_BEEHIVE_ID / NAME_ALIAS")
 
     if at_ids:
         payload = {
