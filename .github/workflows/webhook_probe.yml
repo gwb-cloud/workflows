@@ -1,0 +1,36 @@
+name: Webhook 探测
+
+# 一次性排查工具：给每个 BEEHIVE_WEBHOOK_* 各发一条写着自己 Secret 名字的消息，
+# 用来把 Secret 和真实群对应起来。只能手动触发，不设定时。
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只打印不发群，填 true'
+        required: false
+        default: ''
+      only:
+        description: '只探测这几个（逗号分隔完整 Secret 名），留空=全部'
+        required: false
+        default: ''
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python webhook_probe.py
+        env:
+          BEEHIVE_WEBHOOK: ${{ secrets.BEEHIVE_WEBHOOK }}
+          BEEHIVE_WEBHOOK_YANSHOU: ${{ secrets.BEEHIVE_WEBHOOK_YANSHOU }}
+          BEEHIVE_WEBHOOK_P1_NODE: ${{ secrets.BEEHIVE_WEBHOOK_P1_NODE }}
+          BEEHIVE_WEBHOOK_P2_WORKFLOW: ${{ secrets.BEEHIVE_WEBHOOK_P2_WORKFLOW }}
+          BEEHIVE_WEBHOOK_P3_REDBLACK: ${{ secrets.BEEHIVE_WEBHOOK_P3_REDBLACK }}
+          BEEHIVE_WEBHOOK_PRODUCT: ${{ secrets.BEEHIVE_WEBHOOK_PRODUCT }}
+          BEEHIVE_WEBHOOK_DEV: ${{ secrets.BEEHIVE_WEBHOOK_DEV }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          ONLY: ${{ github.event.inputs.only }}
