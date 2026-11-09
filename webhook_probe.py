@@ -13,13 +13,10 @@ import requests
 
 # 顺序决定发送顺序，群里收到的时间戳可以辅助对照
 SECRETS = [
-    "BEEHIVE_WEBHOOK",
-    "BEEHIVE_WEBHOOK_YANSHOU",
-    "BEEHIVE_WEBHOOK_P1_NODE",
-    "BEEHIVE_WEBHOOK_P2_WORKFLOW",
-    "BEEHIVE_WEBHOOK_P3_REDBLACK",
-    "BEEHIVE_WEBHOOK_PRODUCT",
-    "BEEHIVE_WEBHOOK_DEV",
+    "BEEHIVE_WEBHOOK_FABAN",     # 验收群【发版】
+    "BEEHIVE_WEBHOOK_MANGCE",    # 验收群【盲测】
+    "BEEHIVE_WEBHOOK_WENTI",     # 验收群【问题】
+    "BEEHIVE_WEBHOOK_DEV",       # 高优问题修复专项（研发群）
 ]
 
 DRY_RUN = os.environ.get("DRY_RUN", "").strip().lower() == "true"

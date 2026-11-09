@@ -7,7 +7,7 @@
 需要在 GitHub Actions 的 Secrets 里配置：
 - FEISHU_APP_ID
 - FEISHU_APP_SECRET
-- BEEHIVE_WEBHOOK_PRODUCT
+- BEEHIVE_WEBHOOK_FABAN   （验收群的【发版】机器人）
 
 需要在下方"配置区"填入你自己的表格信息。
 """
@@ -21,7 +21,7 @@ from collections import defaultdict
 
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET"]
-BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_P3_REDBLACK"]
+BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_FABAN"]
 
 # 团队行为记录表（红黑榜）的 app_token 和 table_id
 TABLE_APP_TOKEN = "G2gsbrQTVaN6XXsNiEkcklvinAh"

@@ -18,7 +18,7 @@ PASS_STATUS_VALUES 算通过，SKIP_STATUS_VALUES 不纳入统计，其余状态
 需要在 GitHub Actions 的 Secrets 里配置：
 - FEISHU_APP_ID
 - FEISHU_APP_SECRET
-- BEEHIVE_WEBHOOK_P2_WORKFLOW
+- BEEHIVE_WEBHOOK_FABAN   （验收群的【发版】机器人）
 
 """
 
@@ -32,7 +32,7 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET"]
-BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_P2_WORKFLOW"]
+BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_FABAN"]
 
 # 节点更新总表：发布日期的唯一数据源
 NODE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"

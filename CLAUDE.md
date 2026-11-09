@@ -226,6 +226,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 有编号＝盲测来的，没有＝不是，来源可以推出来，多一个字段只会多一处填错和不同步。
 （「问题发现阶段」是 Zelto内测/对客正式，那是环境不是来源，两者正交。）
 
+## 通知路由：哪条消息发到哪个机器人
+
+2026-11-09 重排。**验收类消息全部收进验收群**，靠不同的 webhook（在蜂巢里显示成
+不同的机器人名）区分类型，而不是靠不同的群。
+
+| Secret | 机器人 | 承接 |
+|---|---|---|
+| `BEEHIVE_WEBHOOK_FABAN` | 验收群【发版】 | 每日验收巡检、超期黑榜预警、发布验收总览、每周红黑榜、诊断AT、测试Webhook |
+| `BEEHIVE_WEBHOOK_MANGCE` | 验收群【盲测】 | 盲测截图校验、盲测完成情况校验 |
+| `BEEHIVE_WEBHOOK_WENTI` | 验收群【问题】 | 问题池规则巡检（含盲测关联漏录） |
+| `BEEHIVE_WEBHOOK_DEV` | 高优问题修复专项（研发群） | 修复进度提醒 |
+
+**已废弃的 5 个 Secret**（代码里已无引用，可以从 GitHub 删掉）：
+`BEEHIVE_WEBHOOK`、`BEEHIVE_WEBHOOK_YANSHOU`、`BEEHIVE_WEBHOOK_PRODUCT`、
+`BEEHIVE_WEBHOOK_P1_NODE`、`BEEHIVE_WEBHOOK_P2_WORKFLOW`、`BEEHIVE_WEBHOOK_P3_REDBLACK`。
+
+### 这次重排踩到的两个坑
+
+- **7 个 Secret 其实只有 5 个群**：`BEEHIVE_WEBHOOK` 和 `_YANSHOU` 同 URL，
+  `_PRODUCT` 和 `_P1_NODE` 同 URL。**光看名字判断不了发到哪**——我曾据名字断定
+  「问题池巡检发到测试群」，实际它一直发在验收群，结论完全错。
+  要确认发到哪，跑「Webhook 探测」workflow，每个 webhook 发一条写着自己名字的消息。
+- **根本没有测试群**：截图校验原来有个 `test_group=true → BEEHIVE_WEBHOOK` 的开关，
+  号称发测试群，但那就是验收群。该开关已删掉，**想试就用 `dry_run=true`**。
+- 每日验收巡检原来往验收群和产品群各发一份**逐字相同**的消息，已去掉重复的第二份。
+
 ## 截图校验的发群与范围
 
 - **正式群是 `BEEHIVE_WEBHOOK_PRODUCT`**，workflow 默认发这个。手动触发时填

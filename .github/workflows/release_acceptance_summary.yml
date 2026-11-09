@@ -33,7 +33,7 @@ jobs:
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-          BEEHIVE_WEBHOOK_P2_WORKFLOW: ${{ secrets.BEEHIVE_WEBHOOK_P2_WORKFLOW }}
+          BEEHIVE_WEBHOOK_FABAN: ${{ secrets.BEEHIVE_WEBHOOK_FABAN }}
           TARGET_RELEASE_DATE: ${{ github.event.inputs.target_date }}
           DEBUG: ${{ github.event.inputs.debug }}
           FORCE_RUN: ${{ github.event.inputs.force_run }}

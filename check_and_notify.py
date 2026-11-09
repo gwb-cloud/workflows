@@ -7,8 +7,7 @@
 需要在 GitHub Actions 的 Secrets 里配置：
 - FEISHU_APP_ID
 - FEISHU_APP_SECRET
-- BEEHIVE_WEBHOOK_YANSHOU   （验收群 webhook）
-- BEEHIVE_WEBHOOK_PRODUCT   （产品群 webhook，如暂不需要可以先不配，脚本会自动跳过）
+- BEEHIVE_WEBHOOK_FABAN   （验收群的【发版】机器人）
 
 需要在下方"配置区"填入你自己的表格信息。
 """
@@ -25,8 +24,9 @@ FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET"]
 # 多群路由表：key 是群的业务名称，value 是对应的 webhook 地址
 # 以后新增群，只需要在这里加一行，加一个对应的 GitHub Secret，不用改下面的业务逻辑
 WEBHOOK_MAP = {
-    "验收群": os.environ.get("BEEHIVE_WEBHOOK_YANSHOU"),
-    "产品群": os.environ.get("BEEHIVE_WEBHOOK_P1_NODE"),
+    # 2026-11-09 归并：原来验收群和产品群各发一份"逐字相同"的消息，
+    # 现在全部收进验收群的【发版】机器人，不再发重复的第二份。
+    "发版": os.environ.get("BEEHIVE_WEBHOOK_FABAN"),
 }
 
 # 多维表格的 app_token 和 table_id，从表格 URL 里取：
@@ -49,7 +49,7 @@ FIELD_I18N_CHECK = "多语言走查"
 P0_DONE_VALUE = "是"
 
 # 巡检提醒默认发到哪个群（以后红黑榜等其他消息可以指定发"产品群"）
-DEFAULT_TARGET = "验收群"
+DEFAULT_TARGET = "发版"
 
 # 某项问题超期这么多天还没处理，额外抄送产品群做提前预警
 ESCALATION_DAYS = 2
@@ -267,8 +267,7 @@ def main():
         if problems:
             lines, at_names_in_order = build_problem_lines(problems)
             text = f"⚠️ 版本 {version} 验收巡检提醒：\n" + "\n".join(lines)
-            send_to_beehive(text, target="验收群", at_names=at_names_in_order)
-            send_to_beehive(text, target="产品群", at_names=at_names_in_order)
+            send_to_beehive(text, target="发版", at_names=at_names_in_order)
             print(text)
 
             # 超期天数达到升级阈值的，产品群额外再收一条更严肃的预警
@@ -279,7 +278,7 @@ def main():
                     f"🚨 版本 {version} 以下事项已超期 {ESCALATION_DAYS} 天以上，大概率将计入本月黑榜：\n"
                     + "\n".join(esc_lines)
                 )
-                send_to_beehive(esc_text, target="产品群", at_names=esc_at_names)
+                send_to_beehive(esc_text, target="发版", at_names=esc_at_names)
                 print(esc_text)
         else:
             print(f"版本 {version} 巡检通过，无异常")

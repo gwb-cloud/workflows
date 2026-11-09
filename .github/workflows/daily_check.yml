@@ -24,6 +24,5 @@ jobs:
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-          BEEHIVE_WEBHOOK_YANSHOU: ${{ secrets.BEEHIVE_WEBHOOK_YANSHOU }}
-          BEEHIVE_WEBHOOK_P1_NODE: ${{ secrets.BEEHIVE_WEBHOOK_P1_NODE }}
+          BEEHIVE_WEBHOOK_FABAN: ${{ secrets.BEEHIVE_WEBHOOK_FABAN }}
           FORCE_SEND: ${{ github.event.inputs.force_send }}

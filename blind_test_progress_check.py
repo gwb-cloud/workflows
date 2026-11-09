@@ -7,7 +7,7 @@
 
 需要 GitHub Actions Secrets：
 - FEISHU_APP_ID_CLI / FEISHU_APP_SECRET_CLI
-- BEEHIVE_WEBHOOK_P2_WORKFLOW（上线流程验收群，跟"发布验收总览"同一个机器人）
+- BEEHIVE_WEBHOOK_MANGCE   （验收群的【盲测】机器人，跟截图校验同一个）
 """
 
 import requests
@@ -39,7 +39,7 @@ FORCE_SEND = os.environ.get("FORCE_SEND", "").strip().lower() == "true"
 
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID_CLI"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET_CLI"]
-BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_P2_WORKFLOW"]
+BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_MANGCE"]
 
 BLIND_TEST_APP_TOKEN = "FnFab3FDKa0JU6sqa19cDVpHnM7"
 

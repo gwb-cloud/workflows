@@ -5,14 +5,14 @@
 用来排查具体是哪几个人的userid有问题。
 
 需要 GitHub Actions Secrets：
-- BEEHIVE_WEBHOOK_YANSHOU （随便用一个已知能用的webhook测试即可）
+- BEEHIVE_WEBHOOK_FABAN   （随便用一个已知能用的 webhook 测试即可）
 """
 
 import requests
 import os
 import time
 
-BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_YANSHOU"]
+BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_FABAN"]
 
 PEOPLE = {
     "Webb": "ouv4qovzpupe9m",

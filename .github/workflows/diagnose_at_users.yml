@@ -14,4 +14,4 @@ jobs:
       - run: pip install requests
       - run: python diagnose_at_users.py
         env:
-          BEEHIVE_WEBHOOK_YANSHOU: ${{ secrets.BEEHIVE_WEBHOOK_YANSHOU }}
+          BEEHIVE_WEBHOOK_FABAN: ${{ secrets.BEEHIVE_WEBHOOK_FABAN }}

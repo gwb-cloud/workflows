@@ -25,12 +25,9 @@ jobs:
       - run: pip install requests
       - run: python webhook_probe.py
         env:
-          BEEHIVE_WEBHOOK: ${{ secrets.BEEHIVE_WEBHOOK }}
-          BEEHIVE_WEBHOOK_YANSHOU: ${{ secrets.BEEHIVE_WEBHOOK_YANSHOU }}
-          BEEHIVE_WEBHOOK_P1_NODE: ${{ secrets.BEEHIVE_WEBHOOK_P1_NODE }}
-          BEEHIVE_WEBHOOK_P2_WORKFLOW: ${{ secrets.BEEHIVE_WEBHOOK_P2_WORKFLOW }}
-          BEEHIVE_WEBHOOK_P3_REDBLACK: ${{ secrets.BEEHIVE_WEBHOOK_P3_REDBLACK }}
-          BEEHIVE_WEBHOOK_PRODUCT: ${{ secrets.BEEHIVE_WEBHOOK_PRODUCT }}
+          BEEHIVE_WEBHOOK_FABAN: ${{ secrets.BEEHIVE_WEBHOOK_FABAN }}
+          BEEHIVE_WEBHOOK_MANGCE: ${{ secrets.BEEHIVE_WEBHOOK_MANGCE }}
+          BEEHIVE_WEBHOOK_WENTI: ${{ secrets.BEEHIVE_WEBHOOK_WENTI }}
           BEEHIVE_WEBHOOK_DEV: ${{ secrets.BEEHIVE_WEBHOOK_DEV }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           ONLY: ${{ github.event.inputs.only }}

@@ -14,4 +14,4 @@ jobs:
       - run: pip install requests
       - run: python test_webhook.py
         env:
-          BEEHIVE_WEBHOOK: ${{ secrets.BEEHIVE_WEBHOOK }}
+          BEEHIVE_WEBHOOK: ${{ secrets.BEEHIVE_WEBHOOK_FABAN }}
