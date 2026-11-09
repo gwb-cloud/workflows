@@ -18,11 +18,35 @@
           {
             "conjunction": "and",
             "conditions": [
-              { "field_name": "处理状态", "operator": "containsAny",
-                "value": [ {"value_type":"option","value":{"name":"待修复"}},
-                           {"value_type":"option","value":{"name":"验证未通过待修复"}},
-                           {"value_type":"option","value":{"name":"开发中"}} ] },
-              { "field_name": "技术负责人", "operator": "isNotEmpty", "value": [] }
+              {
+                "field_name": "处理状态",
+                "operator": "containsAny",
+                "value": [
+                  {
+                    "value_type": "option",
+                    "value": {
+                      "name": "待修复"
+                    }
+                  },
+                  {
+                    "value_type": "option",
+                    "value": {
+                      "name": "验证未通过待修复"
+                    }
+                  },
+                  {
+                    "value_type": "option",
+                    "value": {
+                      "name": "开发中"
+                    }
+                  }
+                ]
+              },
+              {
+                "field_name": "技术负责人",
+                "operator": "isNotEmpty",
+                "value": []
+              }
             ]
           }
         ]
@@ -34,23 +58,63 @@
       "title": "私聊技术负责人",
       "next": null,
       "data": {
-        "receiver": [ { "value_type": "ref", "value": "$.trigger_due.fldMpotSu0" } ],
+        "receiver": [
+          {
+            "value_type": "ref",
+            "value": "$.trigger_due.fldMpotSu0"
+          }
+        ],
         "send_to_everyone": false,
-        "title": [ { "value_type": "text", "value": "今天是计划修复时间" } ],
+        "title": [
+          {
+            "value_type": "text",
+            "value": "今天是计划修复时间"
+          }
+        ],
         "content": [
-          { "value_type": "text", "value": "问题 #" },
-          { "value_type": "ref", "value": "$.trigger_due.fldxXbypqc" },
-          { "value_type": "text", "value": "｜" },
-          { "value_type": "ref", "value": "$.trigger_due.fldlDUVVU0" },
-          { "value_type": "text", "value": "\n" },
-          { "value_type": "ref", "value": "$.trigger_due.fldbdQGIP2" },
-          { "value_type": "text", "value": "\n\n今天是计划修复时间，目前还没修完。改完记得把处理状态和上线日期一起更新。" }
+          {
+            "value_type": "text",
+            "value": "问题 #"
+          },
+          {
+            "value_type": "ref",
+            "value": "$.trigger_due.fldxXbypqc"
+          },
+          {
+            "value_type": "text",
+            "value": "｜"
+          },
+          {
+            "value_type": "ref",
+            "value": "$.trigger_due.fldlDUVVU0"
+          },
+          {
+            "value_type": "text",
+            "value": "\n"
+          },
+          {
+            "value_type": "ref",
+            "value": "$.trigger_due.fldbdQGIP2"
+          },
+          {
+            "value_type": "text",
+            "value": "\n\n今天是计划修复时间，目前还没修完。改完记得把处理状态和上线日期一起更新。"
+          }
         ],
         "btn_list": [
-          { "text": "打开这条记录", "btn_action": "openLink",
-            "link": [ { "value_type": "ref", "value": "$.trigger_due.recordLink" } ] }
+          {
+            "text": "打开这条记录",
+            "btn_action": "openLink",
+            "link": [
+              {
+                "value_type": "ref",
+                "value": "$.trigger_due.recordLink"
+              }
+            ]
+          }
         ]
       }
     }
-  ]
+  ],
+  "_note": "已于 2026-11-09 用 +workflow-create 导入，workflow_id = wkfvcwdNMvZZ40Mc，建出来是 disabled。启用：lark-cli base +workflow-enable --base-token OR5ubORn3atfo3szLSTcbnVdnTf --workflow-id wkfvcwdNMvZZ40Mc。改定义用 +workflow-update（全量替换），别在界面上改完又忘了同步回这个文件。"
 }

@@ -66,7 +66,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `blind_test_mainflow_sync.py` | 手动 | 按「目标」把源表「是否主流程」同步到当月验收表（目标表没这个字段就照源表类型新建），并把主流程用例的「本次抽检版本号」改成只有 `TAG_VALUES` 指定的值（非主流程行不动）。默认 DRY RUN，`confirm=yes` 才写表 | CLI 高权限 | 不发消息 |
 | `issue_field_audit.py` | 每周一10点 | 问题池规则巡检（`OR5ubORn3atfo3szLSTcbnVdnTf` / `tbl3vBsukTCg1yrn`）：按脚本顶部的规则清单判 ①必填缺失 ②条件必填（进 Sprint 要有计划修复时间和技术负责人等）③字段互相矛盾（模块↔应用端、版本号↔应用端、已修复↔负责人验证）④过了计划修复时间还停在待修复（@ 技术负责人）。改规则只动脚本顶部的 `REQUIRED_FIELDS` / `MODULE_TO_PLATFORM` 等常量 | CLI 高权限 | `BEEHIVE_WEBHOOK`（先用测试群） |
 | `beehive_people.py` | — | 蜂巢 @ 到人的账号名单 + `at_text` 发消息封装，被截图校验和问题池巡检共用。新人入职只改这一个文件 | — | — |
-| `feishu_automation_plan_due.json` | — | 飞书自动化定义：计划修复时间当天 09:00，若还停在待修复/开发中，私聊记录里的技术负责人。用 `lark-cli base +workflow-create` 导入，建出来默认停用，要手动 enable | — | — |
+| `feishu_automation_plan_due.json` | — | 飞书自动化定义：计划修复时间当天 09:00，若还停在待修复/开发中，私聊记录里的技术负责人。已导入，`workflow_id=wkfvcwdNMvZZ40Mc`。启用/停用用 `+workflow-enable` / `+workflow-disable`，改定义用 `+workflow-update`（全量替换） | — | — |
 | `blind_test_screenshot_check.py` | 周一/三/五18点 | 截图校验：结果填了「通过」「不通过」就必须有对应截图。报 ①漏填（谁、多少处、哪一组）②疑似放错（Mac 列放竖图/iPhone 列放横图、同一张图重复粘、放的不是图片），按验收人 @ 到人。图片尺寸缓存在 `screenshot_state.json`，同一张图只下载一次 | CLI 高权限 | `BEEHIVE_WEBHOOK`（先用测试群） |
 | `blind_test_round_migrate.py` | 手动 | 当月验收表的「分轮结果列」准备/迁移：先体检（列结构、条数、「本次抽检版本号」分布、各列填写情况），按节点更新总表当月发布次数补齐 `第{n}次发版-Mac/iPhone结果`，并可把基础结果列里已有的结果迁进指定某一轮（已有值的列不覆盖，本轮抽中未验的置「待验收」）。默认 DRY RUN，`confirm=yes` 才写表，另有 `max_write` 安全阀 | CLI 高权限 | 不发消息 |
 | `test_webhook.py` | 手动 | 只测 webhook 连通性 | - | `BEEHIVE_WEBHOOK` |
@@ -223,7 +223,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   记录里有、选项表里没有的值），既然要废弃就没清。
 - **技术负责人是研发，不在蜂巢的验收群里**，所以巡检报告不 @ 他们（硬 @ 只会退化成
   "（缺蜂巢账号，未能提醒）"，更吵）。到期当天的提醒改走**飞书自己的自动化**：
-  `feishu_automation_plan_due.json`，`ReminderTrigger` 监听「计划修复时间」，
+  `feishu_automation_plan_due.json`（已导入，`workflow_id=wkfvcwdNMvZZ40Mc`），
+  `ReminderTrigger` 监听「计划修复时间」，
   `LarkMessageAction` 的 receiver 用 `ref` 直接指向记录里的「技术负责人」字段，
   私聊到人，不用为研发单独建群。巡检里的那条只保留**已经逾期**的兜底清单。
 
