@@ -46,6 +46,11 @@ FIELD_NODE_RELEASE_DATE = "版本发布日期"
 #          all  = 总验收列 + 所有轮次一起校验
 SCOPE = os.environ.get("SCOPE", "round").strip().lower()
 
+# 只校验这几个分组，逗号分隔，例如「总验收」或「总验收,第1次发版」。
+# 留空=SCOPE 范围内的全部分组。用来处理"这个月只补总验收"这类临时要求，
+# 不用改 SCOPE 也不用改代码。
+GROUPS_INPUT = os.environ.get("GROUPS", "").strip()
+
 FIELD_OWNER = "验收人"
 
 
@@ -368,17 +373,32 @@ def main():
     if not pairs:
         print(f"没有任何「结果列 + 截图列」配对（SCOPE={SCOPE}），跳过")
         return
+    if GROUPS_INPUT:
+        want = {g.strip() for g in GROUPS_INPUT.replace("，", ",").split(",") if g.strip()}
+        known = {g for *_r, g in pairs}
+        unknown = want - known
+        if unknown:
+            print(f"⚠️ groups 里这些分组在表里不存在，已忽略：{'、'.join(sorted(unknown))}"
+                  f"（可选的有 {'、'.join(sorted(known))}）")
+        pairs = [x for x in pairs if x[3] in want]
+        if not pairs:
+            print(f"groups={GROUPS_INPUT} 过滤之后没有任何分组可校验，跳过")
+            return
     scope_desc = f"只看第{only_round}次发版" if only_round else "总验收 + 全部轮次"
+    if GROUPS_INPUT:
+        scope_desc = "、".join(dict.fromkeys(g for *_r, g in pairs))
     print(f"{table_name}：校验范围 {scope_desc}，参与的列 {len(pairs)} 组 → "
           + "、".join(f"{g}/{p}" for _r, _s, p, g in pairs))
 
     records = get_all_records(token, BLIND_TEST_APP_TOKEN, table_id)
     print(f"记录条数：{len(records)}")
 
-    missing = defaultdict(lambda: defaultdict(int))      # 人 → 分组/端 → 漏填数
+    # 报告按分组拆成多条消息发，所以统计也要按分组分开存，不能再拼成"分组-端"字符串
+    missing = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))  # 组 → 人 → 端 → 漏填数
     shot_refs = defaultdict(list)                        # file_token → [(人, 组, 端)]
     to_check = []                                        # 待下载检查的图
-    filled_total = 0
+    filled = defaultdict(int)                            # 组 → 已填截图数
+    group_order = list(dict.fromkeys(g for *_r, g in pairs))
 
     for r in records:
         fields = r["fields"]
@@ -388,9 +408,9 @@ def main():
                 continue
             shots = get_attachments(fields, shot_name)
             if not shots:
-                missing[owner][f"{group}-{platform}"] += 1
+                missing[group][owner][platform] += 1
                 continue
-            filled_total += 1
+            filled[group] += 1
             for a in shots:
                 ft = a.get("file_token")
                 if not ft:
@@ -425,7 +445,7 @@ def main():
         for t in ambi:
             print(f"⚠️ 加白失败：编号 {t} 对应多张图，请填完整 file_token")
 
-    wrong = defaultdict(list)     # 人 → [问题描述]
+    wrong = defaultdict(lambda: defaultdict(list))     # 组 → 人 → [问题描述]
     downloaded = 0
     from_cache = 0
     ignored_hits = 0
@@ -435,7 +455,7 @@ def main():
             ignored_hits += 1
             continue
         if mime and not mime.startswith("image/"):
-            wrong[owner].append(f"{group}-{platform} 放的不是图片（{fname or mime}）")
+            wrong[group][owner].append(f"{platform} 放的不是图片（{fname or mime}）")
             continue
         if ft in seen:
             continue
@@ -455,64 +475,86 @@ def main():
         w, h = size
         phone = _is_phone_shot(w, h)
         if platform == "Mac" and phone:
-            wrong[owner].append(f"{group}-Mac 截图是手机整屏截图（{w}×{h}）[{short_id(ft)}]")
+            wrong[group][owner].append(f"Mac 截图是手机整屏截图（{w}×{h}）[{short_id(ft)}]")
         elif platform == "iPhone" and not phone and w > h * 1.2 and w >= 1200:
-            wrong[owner].append(f"{group}-iPhone 截图是大横图（{w}×{h}，疑似电脑截图）[{short_id(ft)}]")
+            wrong[group][owner].append(f"iPhone 截图是大横图（{w}×{h}，疑似电脑截图）[{short_id(ft)}]")
 
     for ft, refs in shot_refs.items():
         if ft in ignored:
             continue
         rows = len({(o, g, p) for o, g, p in refs})
         if len(refs) >= DUP_THRESHOLD and rows >= DUP_THRESHOLD:
-            owner = refs[0][0]
-            wrong[owner].append(f"同一张图被用在 {len(refs)} 处 [{short_id(ft)}]")
+            owner, group, _p = refs[0]
+            wrong[group][owner].append(f"同一张图被用在 {len(refs)} 处 [{short_id(ft)}]")
 
     state["sizes"] = sizes
     state["ignored"] = ignored
     state["last_run"] = now.strftime("%Y-%m-%d %H:%M")
     save_state(state)
 
-    # ---------- 拼报告 ----------
-    miss_total = sum(sum(v.values()) for v in missing.values())
-    wrong_total = sum(len(v) for v in wrong.values())
-    lines = [f"📸 盲测截图校验｜{table_name}｜{now:%m-%d}｜{scope_desc}",
-             f"已填截图 {filled_total} 处，本次下载 {downloaded} 张 + 读缓存 {from_cache} 张"
-             + (f"，跳过已加白 {ignored_hits} 处" if ignored_hits else "")]
-    at_names = []
+    # ---------- 拼报告：一个分组发一条消息 ----------
+    # 以前所有分组挤在一条里，一次几百条没人看得下去。现在按分组拆开，
+    # 干净的分组不发（只打日志），全部干净才发一条汇总。
+    print(f"本次下载 {downloaded} 张 + 读缓存 {from_cache} 张"
+          + (f"，跳过已加白 {ignored_hits} 处" if ignored_hits else ""))
 
-    if miss_total:
-        lines.append(f"\n❌ 漏填截图 {miss_total} 处，涉及 {len(missing)} 人：")
-        for owner, detail in sorted(missing.items(), key=lambda kv: -sum(kv[1].values())):
-            parts = "、".join(f"{k} {v}" for k, v in sorted(detail.items(), key=lambda kv: -kv[1]))
-            lines.append(f"- {mention(owner)}：{sum(detail.values())} 处（{parts}）")
-            if beehive_id(owner):
-                at_names.append(owner)
-    else:
-        lines.append("\n✅ 没有漏填")
+    def build_group_message(group):
+        """返回 (text, at_names)，没问题就返回 (None, [])"""
+        miss = missing.get(group) or {}
+        bad = wrong.get(group) or {}
+        miss_total = sum(sum(v.values()) for v in miss.values())
+        wrong_total = sum(len(v) for v in bad.values())
+        if not miss_total and not wrong_total:
+            return None, []
 
-    if wrong_total:
-        lines.append(f"\n⚠️ 疑似截图放错 {wrong_total} 处：")
-        for owner, items in sorted(wrong.items(), key=lambda kv: -len(kv[1])):
-            lines.append(f"- {mention(owner)}：")
-            for it in items[:5]:
-                lines.append(f"    · {it}")
-            if len(items) > 5:
-                lines.append(f"    · …另有 {len(items) - 5} 处")
-            if beehive_id(owner):
-                at_names.append(owner)
-    else:
-        lines.append("\n✅ 没有发现放错的截图")
+        lines = [f"📸 盲测截图校验｜{table_name}｜{now:%m-%d}｜{group}",
+                 f"该分组已填截图 {filled.get(group, 0)} 处"]
+        at_names = []
 
-    lines.append("\n规则：结果填了「通过」或「不通过」就要配截图；「待验收」「不涉及或无此需求」不用。")
-    if wrong_total:
-        lines.append("截图确认没问题的，拿后面那个 [编号] 去 Actions 手动触发本流程、填进 ignore，以后不再报。")
-    text = "\n".join(lines)
+        if miss_total:
+            lines.append(f"\n❌ 漏填截图 {miss_total} 处，涉及 {len(miss)} 人：")
+            for owner, detail in sorted(miss.items(), key=lambda kv: -sum(kv[1].values())):
+                parts = "、".join(f"{k} {v}" for k, v in sorted(detail.items(), key=lambda kv: -kv[1]))
+                lines.append(f"- {mention(owner)}：{sum(detail.values())} 处（{parts}）")
+                if beehive_id(owner):
+                    at_names.append(owner)
 
-    if DRY_RUN:
-        print("== DRY RUN ==（不发送）\n" + text)
-        print(f"\n待 @ 的人：{at_names}")
-        return
-    beehive_send(text, at_names)
+        if wrong_total:
+            lines.append(f"\n⚠️ 疑似截图放错 {wrong_total} 处：")
+            for owner, items in sorted(bad.items(), key=lambda kv: -len(kv[1])):
+                lines.append(f"- {mention(owner)}：")
+                for it in items[:5]:
+                    lines.append(f"    · {it}")
+                if len(items) > 5:
+                    lines.append(f"    · …另有 {len(items) - 5} 处")
+                if beehive_id(owner):
+                    at_names.append(owner)
+
+        lines.append("\n规则：结果填了「通过」或「不通过」就要配截图；「待验收」「不涉及或无此需求」不用。")
+        if wrong_total:
+            lines.append("截图确认没问题的，拿后面那个 [编号] 去 Actions 手动触发本流程、填进 ignore，以后不再报。")
+        return "\n".join(lines), at_names
+
+    sent = 0
+    for group in group_order:
+        text, at_names = build_group_message(group)
+        if text is None:
+            print(f"✅ {group}：没有漏填、没有放错，不发消息")
+            continue
+        sent += 1
+        if DRY_RUN:
+            print(f"\n== DRY RUN ==（不发送）第 {sent} 条 / 分组「{group}」\n{text}")
+            print(f"待 @ 的人：{at_names}")
+        else:
+            beehive_send(text, at_names)
+
+    if sent == 0:
+        text = (f"📸 盲测截图校验｜{table_name}｜{now:%m-%d}｜{scope_desc}\n"
+                f"✅ 全部通过：没有漏填，也没有发现放错的截图")
+        if DRY_RUN:
+            print("\n== DRY RUN ==（不发送）\n" + text)
+        else:
+            beehive_send(text, [])
 
 
 if __name__ == "__main__":

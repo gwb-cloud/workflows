@@ -25,6 +25,10 @@ on:
         description: '校验范围：all=总验收列+所有轮次（默认）/ round=只看当前这一轮发版'
         required: false
         default: ''
+      groups:
+        description: '只校验哪些分组，逗号分隔，如「总验收」或「总验收,第1次发版」。留空=用下面的默认值'
+        required: false
+        default: ''
       ignore:
         description: '加白：确认没问题的图片编号（报告里的 [xxxxxxxx]），逗号分隔，以后不再报'
         required: false
@@ -55,6 +59,9 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           MAX_DOWNLOAD: ${{ github.event.inputs.max_download }}
           SCOPE: ${{ github.event.inputs.scope || 'all' }}
+          # 2026-11 现状：第1/2次发版的欠账不补了，只催总验收的 Mac + iPhone。
+          # 等以后要恢复催各轮发版，把这里的默认值改成空字符串即可。
+          GROUPS: ${{ github.event.inputs.groups || '总验收' }}
           IGNORE: ${{ github.event.inputs.ignore }}
           UNIGNORE: ${{ github.event.inputs.unignore }}
       - name: 提交图片尺寸缓存
