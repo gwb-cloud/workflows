@@ -262,6 +262,42 @@ def download_size(token, file_token):
         return None
 
 
+# 手机整屏截图的尺寸特征。要防的是"把手机整屏图贴到 Mac 列"，
+# 而手机整屏截图的尺寸一定精确等于某个设备分辨率；人在 Mac 上裁出来的
+# 一小块是任意尺寸，所以只认分辨率、不认"是不是竖图"，误报趋近于零。
+PHONE_RESOLUTIONS = {
+    (1320, 2868),   # iPhone 16 Pro Max
+    (1206, 2622),   # iPhone 16 Pro
+    (1179, 2556),   # iPhone 15/16 Pro、15/16
+    (1290, 2796),   # iPhone 14/15/16 Plus、Pro Max
+    (1170, 2532),   # iPhone 12/13/14
+    (1284, 2778),   # iPhone 12/13 Pro Max
+    (1125, 2436),   # iPhone X/XS/11 Pro
+    (1242, 2688),   # iPhone XS Max/11 Pro Max
+    (828, 1792),    # iPhone XR/11
+    (750, 1334),    # iPhone SE2/SE3/7/8
+    (640, 1136),    # iPhone SE1
+    (1080, 2340),   # 安卓常见
+    (1080, 2400),
+    (1440, 3200),
+}
+# 有人会把截图等比缩小再传，尺寸就对不上了，所以比例也认
+PHONE_RATIOS = sorted({round(h / w, 4) for w, h in PHONE_RESOLUTIONS})
+RATIO_TOLERANCE = 0.01   # 1%
+
+
+def _is_phone_shot(w, h):
+    """这张图是不是一张"没动过的手机整屏截图"（含横屏和等比缩放）"""
+    if (w, h) in PHONE_RESOLUTIONS or (h, w) in PHONE_RESOLUTIONS:
+        return True
+    # 等比缩放：比例对上且仍是整屏量级（裁出来的小块比例几乎不可能正好落在设备比例上）
+    long_side, short_side = max(w, h), min(w, h)
+    if short_side < 500:
+        return False
+    ratio = round(long_side / short_side, 4)
+    return any(abs(ratio - r) <= r * RATIO_TOLERANCE for r in PHONE_RATIOS)
+
+
 def parse_date(ms_timestamp):
     """飞书日期字段换算成北京时间后固定停在23:00，需要再加1小时才能拿到正确日期"""
     if not ms_timestamp:
@@ -417,10 +453,11 @@ def main():
         if not size:
             continue
         w, h = size
-        if platform == "Mac" and h > w:
-            wrong[owner].append(f"{group}-Mac 截图是竖图（{w}×{h}，疑似手机截图）[{short_id(ft)}]")
-        elif platform == "iPhone" and w > h:
-            wrong[owner].append(f"{group}-iPhone 截图是横图（{w}×{h}，疑似电脑截图）[{short_id(ft)}]")
+        phone = _is_phone_shot(w, h)
+        if platform == "Mac" and phone:
+            wrong[owner].append(f"{group}-Mac 截图是手机整屏截图（{w}×{h}）[{short_id(ft)}]")
+        elif platform == "iPhone" and not phone and w > h * 1.2 and w >= 1200:
+            wrong[owner].append(f"{group}-iPhone 截图是大横图（{w}×{h}，疑似电脑截图）[{short_id(ft)}]")
 
     for ft, refs in shot_refs.items():
         if ft in ignored:
