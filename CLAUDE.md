@@ -133,6 +133,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `PERSON_BEEHIVE_ID` 结构：`{"飞书姓名": {"id": "蜂巢userid", "nickname": "蜂巢显示名"}}`。key 用于匹配飞书数据，`nickname` 是蜂巢真实显示名（例："陈杨"在蜂巢显示为"秦汉"）。人员缺失时 @ **静默失效**，只在日志里打印 ⚠️
 - ⚠️ 飞书"人员"字段读出来的是飞书实名（例如验收表的验收人是"郭文博""李雨纯"），而 `PERSON_BEEHIVE_ID` 现有 key 有些是花名/简称（"Webb""雨纯"）。给基于人员字段的消息加 @ 时，先确认 key 与实际读出的姓名一致
 
+### @ 不变蓝的那个坑（2026-11-09 踩过）
+
+正文里的 `@XXX` 必须和 `atUsersInfo[].groupNickname` **完全一致**，蜂巢才会把它渲染成蓝色
+链接；匹配上之后蜂巢还会把文字替换成这人在群里的真实昵称（`@郭文博` 显示成 `@Webb`、
+`@爱德` 显示成 `@AD`、`@严光` 显示成 `@严光（王磊）`）。
+
+对不上的时候消息**照样发到人**，只是文字是灰的，看着像没 @ 到，很容易误判成 userId 配错。
+踩中的都是飞书名和蜂巢显示名不一致的人：
+
+| 飞书名 | 蜂巢显示名 | 原来正文写的 | 结果 |
+| --- | --- | --- | --- |
+| Lexia | 乐夏 | `@Lexia` | 灰的 |
+| 李雨纯 | 雨纯 | `@李雨纯` | 灰的 |
+| 张梦成 | 梦成 Rhys | `@张梦成` | 灰的 |
+| 陈杨 | 秦汉 | `@陈杨` | 灰的 |
+
+所以拼正文一律走 `beehive_people.mention()`（它内部用 `display_name()`），
+`check_and_notify.py` / `release_acceptance_summary.py` 里则走各自的 `beehive_nickname()`。
+**不要再直接写 `f"@{姓名}"`。**
+
+> ⚠️ 「梦成 Rhys」里带空格，蜂巢会不会在空格处截断匹配还没验证过。
+> 下一次推送如果他还是灰的，把 `NAME_ALIAS["张梦成"]` 改成 `"梦成"` 再试。
+
+> ⚠️ `check_and_notify.py` 和 `release_acceptance_summary.py` 各自还维护着一份 12 人的
+> `PERSON_BEEHIVE_ID`（key 是「Webb/Rhys/苏宸」这套写法，和 `beehive_people.py` 的
+> 「郭文博/梦成 Rhys/段苏宸」不是一套），**两份都没有乐夏**。等确认这两个脚本的来源表里
+> 乐夏叫什么，再补进去并考虑合并到 `beehive_people.py`。
+
 ## 已知的关键坑（不要重新踩）
 
 1. **日期字段偏 1 小时**：飞书"纯日期"字段的毫秒时间戳按 UTC+8 换算后时钟固定停在 23:00。所有 `parse_date()` 都在换算后再 `+ timedelta(hours=1)`，这是实测规律，不要"修正"成标准时区换算。

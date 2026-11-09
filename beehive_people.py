@@ -39,11 +39,23 @@ def beehive_id(name):
     return PERSON_BEEHIVE_ID.get(NAME_ALIAS.get(name, name))
 
 
+def display_name(name):
+    """飞书姓名 → 蜂巢群里的显示名。正文里的"@XXX"必须用这个，不能用飞书姓名"""
+    return NAME_ALIAS.get(name, name)
+
+
 def mention(name):
-    """能 @ 的才写成"@姓名"。@ 不了的人如果也写 @，正文里的 @ 个数就会跟
-    atUserList 对不上，蜂巢会把后面的 @ 都渲染错位，所以这里退化成纯姓名"""
-    # 退化文案里不能再出现 @ 符号，否则又会被算成一处 @
-    return f"@{name}" if beehive_id(name) else f"{name}（缺蜂巢账号，未能提醒）"
+    """能 @ 的才写成"@显示名"。
+
+    两个坑都踩过，别改回去：
+    1. 正文里的"@XXX"必须和 atUsersInfo[].groupNickname 完全一致，蜂巢才会把它渲染成
+       蓝色链接（渲染时还会把它替换成这人在群里的真实昵称，比如 @郭文博 显示成 @Webb）。
+       所以这里用 display_name()，不能用飞书姓名——否则有 NAME_ALIAS 的那几个人
+       （乐夏/雨纯/梦成 Rhys）消息能收到，但文字是灰的，看着像没 @ 到。
+    2. @ 不了的人不能也写 @，否则正文里的 @ 个数跟 atUserList 对不上，
+       蜂巢会把后面的 @ 全渲染错位。退化文案里也不能再出现 @ 符号。
+    """
+    return f"@{display_name(name)}" if beehive_id(name) else f"{name}（缺蜂巢账号，未能提醒）"
 
 
 def beehive_send(text, at_names, webhook=None):
@@ -58,7 +70,8 @@ def beehive_send(text, at_names, webhook=None):
         user_id = beehive_id(name)
         if user_id:
             at_ids.append(user_id)
-            at_users_info.append({"atUserID": user_id, "groupNickname": NAME_ALIAS.get(name, name)})
+            # groupNickname 必须和正文里 mention() 写的那个名字一致，见 mention() 注释
+            at_users_info.append({"atUserID": user_id, "groupNickname": display_name(name)})
         else:
             print(f"⚠️ 没找到「{name}」的蜂巢账号，请补 PERSON_BEEHIVE_ID / NAME_ALIAS")
     if at_ids:

@@ -82,6 +82,14 @@ PERSON_BEEHIVE_ID = {
     "严光": {"id": "ouvgwgfyt1elue", "nickname": "严光"},
 }
 
+
+def beehive_nickname(name):
+    """正文里写"@XXX"要用蜂巢群里的显示名，必须和 atUsersInfo[].groupNickname 一致，
+    否则蜂巢匹配不上、不会渲染成蓝色链接（消息还是会发到人，只是看着像没@到）。
+    踩过的例子：飞书叫「陈杨」，蜂巢显示名是「秦汉」。"""
+    info = PERSON_BEEHIVE_ID.get(name) or {}
+    return info.get("nickname", name)
+
 FORCE_SEND = os.environ.get("FORCE_SEND", "false").lower() == "true"
 
 # ========== 以下不用改 ==========
@@ -164,7 +172,7 @@ def build_problem_lines(problems):
     for p, _ in problems:
         owners = ITEM_OWNERS.get(p, [])
         if owners:
-            owner_text = " ".join(f"@{o}" for o in owners)
+            owner_text = " ".join(f"@{beehive_nickname(o)}" for o in owners)
             lines.append(f"- {p} {owner_text}")
             at_names_in_order.extend(owners)
         else:
