@@ -1,0 +1,56 @@
+{
+  "client_token": "issue-plan-due-remind-20261109",
+  "title": "计划修复时间到期提醒技术负责人",
+  "steps": [
+    {
+      "id": "trigger_due",
+      "type": "ReminderTrigger",
+      "title": "计划修复时间当天 09:00，且还停在待修复",
+      "next": "action_notify",
+      "data": {
+        "table_name": "数据表",
+        "field_name": "计划修复时间",
+        "offset": 0,
+        "unit": "DAY",
+        "hour": 9,
+        "minute": 0,
+        "condition_list": [
+          {
+            "conjunction": "and",
+            "conditions": [
+              { "field_name": "处理状态", "operator": "containsAny",
+                "value": [ {"value_type":"option","value":{"name":"待修复"}},
+                           {"value_type":"option","value":{"name":"验证未通过待修复"}},
+                           {"value_type":"option","value":{"name":"开发中"}} ] },
+              { "field_name": "技术负责人", "operator": "isNotEmpty", "value": [] }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "action_notify",
+      "type": "LarkMessageAction",
+      "title": "私聊技术负责人",
+      "next": null,
+      "data": {
+        "receiver": [ { "value_type": "ref", "value": "$.trigger_due.fldMpotSu0" } ],
+        "send_to_everyone": false,
+        "title": [ { "value_type": "text", "value": "今天是计划修复时间" } ],
+        "content": [
+          { "value_type": "text", "value": "问题 #" },
+          { "value_type": "ref", "value": "$.trigger_due.fldxXbypqc" },
+          { "value_type": "text", "value": "｜" },
+          { "value_type": "ref", "value": "$.trigger_due.fldlDUVVU0" },
+          { "value_type": "text", "value": "\n" },
+          { "value_type": "ref", "value": "$.trigger_due.fldbdQGIP2" },
+          { "value_type": "text", "value": "\n\n今天是计划修复时间，目前还没修完。改完记得把处理状态和上线日期一起更新。" }
+        ],
+        "btn_list": [
+          { "text": "打开这条记录", "btn_action": "openLink",
+            "link": [ { "value_type": "ref", "value": "$.trigger_due.recordLink" } ] }
+        ]
+      }
+    }
+  ]
+}

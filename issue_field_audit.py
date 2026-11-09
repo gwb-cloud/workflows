@@ -26,7 +26,7 @@ import os
 import time
 from datetime import datetime, timezone, timedelta
 
-from beehive_people import mention, beehive_send
+from beehive_people import beehive_send
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 
@@ -308,20 +308,18 @@ def main():
         else:
             lines.append("- 无")
 
+    # 到期当天的提醒由飞书自动化「计划修复时间到期提醒技术负责人」私聊研发，这里只报已经
+    # 逾期的兜底清单给群里。研发基本都不在这个群、也不在 PERSON_BEEHIVE_ID 里，所以不 @，
+    # 直接写名字——硬 @ 只会退化成"（缺蜂巢账号，未能提醒）"，反而更吵
     lines.append("\n⏰ 过了计划修复时间还停在待修复：")
     if overdue:
         by_owner = {}
         for r in overdue:
-            names = owner_names(r) or ["未指派技术负责人"]
-            for n in names:
+            for n in (owner_names(r) or ["未指派技术负责人"]):
                 by_owner.setdefault(n, []).append(key_of(r))
         for name, keys in sorted(by_owner.items(), key=lambda kv: -len(kv[1])):
             shown = "/".join(keys[:MAX_KEYS]) + (f" 等{len(keys)}条" if len(keys) > MAX_KEYS else "")
-            if name == "未指派技术负责人":
-                lines.append(f"- {name}：{len(keys)} 条｜主键 {shown}")
-            else:
-                lines.append(f"- {mention(name)}：{len(keys)} 条｜主键 {shown}")
-                at_names.append(name)
+            lines.append(f"- {name}：{len(keys)} 条｜主键 {shown}")
     else:
         lines.append("- 无")
 

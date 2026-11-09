@@ -66,6 +66,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `blind_test_mainflow_sync.py` | 手动 | 按「目标」把源表「是否主流程」同步到当月验收表（目标表没这个字段就照源表类型新建），并把主流程用例的「本次抽检版本号」改成只有 `TAG_VALUES` 指定的值（非主流程行不动）。默认 DRY RUN，`confirm=yes` 才写表 | CLI 高权限 | 不发消息 |
 | `issue_field_audit.py` | 每周一10点 | 问题池规则巡检（`OR5ubORn3atfo3szLSTcbnVdnTf` / `tbl3vBsukTCg1yrn`）：按脚本顶部的规则清单判 ①必填缺失 ②条件必填（进 Sprint 要有计划修复时间和技术负责人等）③字段互相矛盾（模块↔应用端、版本号↔应用端、已修复↔负责人验证）④过了计划修复时间还停在待修复（@ 技术负责人）。改规则只动脚本顶部的 `REQUIRED_FIELDS` / `MODULE_TO_PLATFORM` 等常量 | CLI 高权限 | `BEEHIVE_WEBHOOK`（先用测试群） |
 | `beehive_people.py` | — | 蜂巢 @ 到人的账号名单 + `at_text` 发消息封装，被截图校验和问题池巡检共用。新人入职只改这一个文件 | — | — |
+| `feishu_automation_plan_due.json` | — | 飞书自动化定义：计划修复时间当天 09:00，若还停在待修复/开发中，私聊记录里的技术负责人。用 `lark-cli base +workflow-create` 导入，建出来默认停用，要手动 enable | — | — |
 | `blind_test_screenshot_check.py` | 周一/三/五18点 | 截图校验：结果填了「通过」「不通过」就必须有对应截图。报 ①漏填（谁、多少处、哪一组）②疑似放错（Mac 列放竖图/iPhone 列放横图、同一张图重复粘、放的不是图片），按验收人 @ 到人。图片尺寸缓存在 `screenshot_state.json`，同一张图只下载一次 | CLI 高权限 | `BEEHIVE_WEBHOOK`（先用测试群） |
 | `blind_test_round_migrate.py` | 手动 | 当月验收表的「分轮结果列」准备/迁移：先体检（列结构、条数、「本次抽检版本号」分布、各列填写情况），按节点更新总表当月发布次数补齐 `第{n}次发版-Mac/iPhone结果`，并可把基础结果列里已有的结果迁进指定某一轮（已有值的列不覆盖，本轮抽中未验的置「待验收」）。默认 DRY RUN，`confirm=yes` 才写表，另有 `max_write` 安全阀 | CLI 高权限 | 不发消息 |
 | `test_webhook.py` | 手动 | 只测 webhook 连通性 | - | `BEEHIVE_WEBHOOK` |
@@ -165,6 +166,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 飞书建字段的 type 编号：1=文本 3=单选 4=多选 5=日期 11=人员。
 
+## 截图校验的发群与范围
+
+- **正式群是 `BEEHIVE_WEBHOOK_PRODUCT`**，workflow 默认发这个。手动触发时填
+  `test_group=true` 才改发测试群 `BEEHIVE_WEBHOOK`。
+- **`SCOPE` 默认已改成 `all`**（总验收列 + 全部轮次）。2026-11-09 切之前量过底：
+  M11 共 2000 行，**一张截图都还没传过**，scope=all 会报 **1857 处漏填**
+  （总验收-Mac 693 / 总验收-iPhone 370 / 第1次发版 499 / 第2次发版 295），
+  人均 117~290 处。报告按人聚合，所以消息只有 9 行，不会刷屏。
+- 因为还没有任何截图，**「放错截图」这一类目前恒为 0**，不是没生效。
+
 ## 问题池（验收问题表）字段校验规则
 
 `issue_field_audit.py` 按这份清单判，改口径先改这里再改脚本常量。
@@ -188,16 +199,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 模块 = IM-Mac → 应用端 = Mac；IM-iPhone → iPhone；带「后台」字样的模块 → Web |
 | 首次发现版本号前缀 Mac*/IOS*/Web* → 应用端 分别为 Mac/iPhone/Web |
 
-**D 逾期提醒**：处理状态 = 待修复 且 计划修复时间 < 今天 → @ 技术负责人
+**D 逾期提醒**：处理状态 = 待修复 且 计划修复时间 < 今天 → 列出技术负责人（不 @，见下）
+
+**首次发现版本号的兜底口径**：按「问题提出时间落在哪两个发布日之间」算前一个版本。
+早于已知最早发布记录的，iPhone 一律 `IOS1.2.0`、Mac 一律 `Mac1.0.132`（各自枚举里最早的
+那一个）。2026-11-09 按这个口径补了 178 条（177 iPhone + 1 Mac），现在这一列 0 缺失。
 
 ### 几个必须知道的前提
 
 - **默认值已于 2026-11-07 全部清掉。** 这张表原来有 13 个字段配了默认值，新建记录就自动带上
   `问题类型=体验问题`、`问题发现阶段=对客正式`、`首次发现版本号=Mac1.0.479`（写死的旧版本）、
   `设计稿链接=[-](http://-)`（假链接）等等，导致"有值"不等于"有人填过"，统计全是虚的。
-  现在 12 个已清空，**只剩 `问题提出时间` 的"自动填入创建时间"清不掉**（API 的
-  `default_value: null` / `{}` / `""` 都不生效，要在飞书网页端关掉那个开关）。
-  不要再给这张表加默认值，宁可让巡检报缺失。
+  现在 12 个已清空。**剩 `问题提出时间` 的"添加新记录的创建时间"不用管** —— 那是飞书日期
+  字段自带的设置项，不是脏默认值，API 的 `default_value: null` / `{}` / `""` 都改不动它。
+  不要再给这张表加别的默认值，宁可让巡检报缺失。
 - `PLACEHOLDER_TEXTS` 这段逻辑**保留**：历史行里还会有 `-` `无` `/` 这类占位值，
   而且以后别人手填也可能填这些，不能当成填过了。
 - **默认值只在新建记录时生效，API 更新已有记录不会触发。** 已用"原样回写同一个值"验证过。
@@ -206,8 +221,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **一级模块、二级模块准备废弃**，不参与校验（`DEPRECATED_FIELDS`）。
   这两个字段里还留着一堆脏选项（`一级模块` 混进了 `Mac 体验优化专项`，`二级模块` 有 33 个
   记录里有、选项表里没有的值），既然要废弃就没清。
-- **技术负责人是研发，不在 `beehive_people.PERSON_BEEHIVE_ID` 里**（那份只有验收团队），
-  所以逾期提醒目前 @ 不到人，会退化成纯姓名。要真 @ 得先把研发的蜂巢 userId 补进去。
+- **技术负责人是研发，不在蜂巢的验收群里**，所以巡检报告不 @ 他们（硬 @ 只会退化成
+  "（缺蜂巢账号，未能提醒）"，更吵）。到期当天的提醒改走**飞书自己的自动化**：
+  `feishu_automation_plan_due.json`，`ReminderTrigger` 监听「计划修复时间」，
+  `LarkMessageAction` 的 receiver 用 `ref` 直接指向记录里的「技术负责人」字段，
+  私聊到人，不用为研发单独建群。巡检里的那条只保留**已经逾期**的兜底清单。
 
 ### 删过的异常选项（2026-11-07）
 
