@@ -25,6 +25,7 @@ import requests
 import os
 import time
 from datetime import datetime, timezone, timedelta
+from collections import defaultdict
 
 from beehive_people import beehive_send, DEPARTED
 
@@ -61,6 +62,32 @@ VERSION_PREFIX_TO_PLATFORM = {"Mac": "Mac", "IOS": "iPhone", "Web": "Web"}
 
 # 这几个状态算"还没修完"
 UNFINISHED_STATUS = {"待修复", "验证未通过待修复", "开发中"}
+
+# 处理状态 → 负责人验证 允许的取值。来自 Webb 2026-11-09 定的流程：
+# 负责人验证不是"验证修复管不管用"，而是"产品认不认可研发给的这个结论"，
+# 所以每个处理状态都有对应的期望值，不存在"无需验证"。
+#   已修复            → 已验证（验不过就该把状态改回 待修复）
+#   待发版            → 待验证/验证未通过（对客强更后才算通过，同时改成 已修复）
+#   待修复            → 待验证（还没验）/ 验证未通过（验了，还没修好）
+#   待开发功能无需修复 → 验证未通过（功能没做，问题必然还在，产品持续跟进）
+#   不需修复需求如此   → 已验证（认可）；不认可就把状态改回 待修复
+#   未重现            → 已验证（认可）；不认可就把状态改回 待修复
+#   验证未通过待修复   → 验证未通过（状态本身就是验证结果）
+STATUS_TO_VERIFY = {
+    "已修复": {"已验证"},
+    "待发版": {"待验证", "验证未通过"},
+    "待修复": {"待验证", "验证未通过"},
+    "待开发功能无需修复": {"验证未通过"},
+    "不需修复需求如此": {"已验证"},
+    "未重现": {"已验证"},
+    "验证未通过待修复": {"验证未通过"},
+}
+# 这两个状态本身就可疑，不管负责人验证填了什么都要列出来让人复核：
+# 开发中 = 研发多半改完忘了改状态；临时hold = 挂起的不能忘了捞回来
+ALWAYS_REVIEW_STATUS = {
+    "开发中": "研发多半已经改完忘了改状态",
+    "临时hold": "挂起中，需要定期捞回来复核",
+}
 
 # 处理状态=已修复 时，负责人验证应该是这个值
 # 注意：这个字段的枚举是 已验证/待验证/验证未通过，没有"验证通过"这一项
@@ -232,11 +259,22 @@ def check_conditional(records):
 def check_consistency(records):
     out = []
 
-    # 3.3 已修复 → 负责人验证应为「已验证」
-    hits = [r for r in records if sel(r, "处理状态") == "已修复"
-            and sel(r, "负责人验证") != VERIFIED_OK]
-    if hits:
-        out.append((f"处理状态=已修复，但负责人验证不是「{VERIFIED_OK}」", hits))
+    # 3.3 处理状态 ↔ 负责人验证。按状态分开报，不然一条里混了七八种情况没法改
+    by_status = defaultdict(list)
+    for r in records:
+        status = sel(r, "处理状态")
+        allowed = STATUS_TO_VERIFY.get(status)
+        if allowed and sel(r, "负责人验证") not in allowed:
+            by_status[status].append(r)
+    for status in sorted(by_status, key=lambda k: -len(by_status[k])):
+        want = "/".join(sorted(STATUS_TO_VERIFY[status]))
+        out.append((f"处理状态={status}，但负责人验证不是「{want}」", by_status[status]))
+
+    # 开发中 / 临时hold：状态本身就要人工复核
+    for status, why in ALWAYS_REVIEW_STATUS.items():
+        hits = [r for r in records if sel(r, "处理状态") == status]
+        if hits:
+            out.append((f"处理状态={status}（{why}）", hits))
 
     # 3.7 模块 ↔ 应用端
     hits = []
@@ -286,7 +324,8 @@ def check_overdue(records, today):
 
 def fmt(title, hits, total):
     keys = [key_of(r) for r in hits[:MAX_KEYS]]
-    more = f" 等{len(hits)}条" if len(hits) > MAX_KEYS else ""
+    # 写"另有N条"而不是"等N条"：后者会被读成总数，和前面的条数对不上
+    more = f" 另有{len(hits) - MAX_KEYS}条" if len(hits) > MAX_KEYS else ""
     return f"- {title}：{len(hits)} 条（{len(hits) / total:.0%}）｜主键 {'/'.join(keys)}{more}"
 
 
@@ -328,7 +367,7 @@ def main():
             for n in (owner_names(r) or ["未指派技术负责人"]):
                 by_owner.setdefault(n, []).append(key_of(r))
         for name, keys in sorted(by_owner.items(), key=lambda kv: -len(kv[1])):
-            shown = "/".join(keys[:MAX_KEYS]) + (f" 等{len(keys)}条" if len(keys) > MAX_KEYS else "")
+            shown = "/".join(keys[:MAX_KEYS]) + (f" 另有{len(keys) - MAX_KEYS}条" if len(keys) > MAX_KEYS else "")
             lines.append(f"- {name}：{len(keys)} 条｜主键 {shown}")
     else:
         lines.append("- 无")
