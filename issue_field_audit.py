@@ -26,7 +26,7 @@ import os
 import time
 from datetime import datetime, timezone, timedelta
 
-from beehive_people import beehive_send
+from beehive_people import beehive_send, DEPARTED
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 
@@ -58,6 +58,9 @@ MODULE_TO_PLATFORM = {"IM-Mac": "Mac", "IM-iPhone": "iPhone"}
 
 # 首次发现版本号前缀 → 应用端
 VERSION_PREFIX_TO_PLATFORM = {"Mac": "Mac", "IOS": "iPhone", "Web": "Web"}
+
+# 这几个状态算"还没修完"
+UNFINISHED_STATUS = {"待修复", "验证未通过待修复", "开发中"}
 
 # 处理状态=已修复 时，负责人验证应该是这个值
 # 注意：这个字段的枚举是 已验证/待验证/验证未通过，没有"验证通过"这一项
@@ -256,7 +259,14 @@ def check_consistency(records):
     if hits:
         out.append(("首次发现版本号和应用端对不上", hits))
 
-    # 首次发现版本号的问题，提出时间不该早于……（留给以后接发布节点表，先不判）
+    # 技术负责人已离职，但问题还没修完 —— 没人会收到到期提醒，等于无人认领。
+    # 离职名单只能人工维护（见 beehive_people.DEPARTED 的注释，通讯录查不出来）。
+    # 已经关闭的记录不报：那是历史署名，清掉反而丢了"当时是谁修的"。
+    hits = [r for r in records if sel(r, "处理状态") in UNFINISHED_STATUS
+            and any(n in DEPARTED for n in owner_names(r))]
+    if hits:
+        out.append(("技术负责人已离职，但问题还没修完（没人会收到提醒）", hits))
+
     return out
 
 

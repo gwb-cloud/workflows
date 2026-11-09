@@ -227,6 +227,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 处理状态 = 已修复 → 负责人验证 应为「已验证」 |
 | 模块 = IM-Mac → 应用端 = Mac；IM-iPhone → iPhone；带「后台」字样的模块 → Web |
 | 首次发现版本号前缀 Mac*/IOS*/Web* → 应用端 分别为 Mac/iPhone/Web |
+| 技术负责人在 `beehive_people.DEPARTED` 里，但问题还没修完（等于无人认领） |
 
 **D 逾期提醒**：处理状态 = 待修复 且 计划修复时间 < 今天 → 列出技术负责人（不 @，见下）
 
@@ -260,6 +261,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   私聊保证个人看得见，群消息保证进度对所有人可见、而且不会因为"一天到期 119 条"
   被刷屏（私聊那边李玉海那天会收到 12 条，群里只占一行）。
   验收群那份周一巡检里的逾期清单只是兜底，不 @ 人。
+
+- **离职的人不会自动消失，飞书通讯录也查不出来。** 验证过：7 个已确认离职的技术负责人里，
+  4 个 `is_activated` 还是 `True`，3 个用 `+search-user` 根本搜不到。所以离职名单只能人工
+  维护在 `beehive_people.DEPARTED`，巡检靠它来报「挂在离职的人头上还没修完」。
+
+  清理的口径是 **只清没修完的，不清已关闭的**：已关闭记录上的署名是"当时是谁修的"，
+  清掉就丢了历史。2026-11-09 这批 33 条里只有 3 条没修完（主键 19、740、1163），
+  清完之后 740 还剩在职的陈理仕，19 和 1163 变成无负责人、会在巡检的
+  「已进 Sprint 但技术负责人为空」那类里暴露出来，等人认领。
 
 - **研发的蜂巢名单在 `beehive_people.DEV_BEEHIVE_ID`**，和验收团队那份分开，
   因为两拨人不在同一个群。飞书姓名和蜂巢显示名不一致的写进 `DEV_NAME_ALIAS`。
