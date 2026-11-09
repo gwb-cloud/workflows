@@ -46,10 +46,18 @@ FIELD_NODE_RELEASE_DATE = "版本发布日期"
 #          all  = 总验收列 + 所有轮次一起校验
 SCOPE = os.environ.get("SCOPE", "round").strip().lower()
 
-# 只校验这几个分组，逗号分隔，例如「总验收」或「总验收,第1次发版」。
-# 留空=SCOPE 范围内的全部分组。用来处理"这个月只补总验收"这类临时要求，
-# 不用改 SCOPE 也不用改代码。
+# GROUPS：白名单，只校验这几个分组，逗号分隔。留空=SCOPE 范围内的全部分组。
+# 临时只想看某一个分组时用，不要拿它表达长期策略——新增的发版轮次会被白名单
+# 静默挡掉（2026-11 踩过：默认值写成「总验收」，第3次发版上线后不会提示）。
 GROUPS_INPUT = os.environ.get("GROUPS", "").strip()
+
+# EXCLUDE_GROUPS：黑名单，不催这几个分组。表达"某几轮的欠账不补了"要用这个，
+# 因为它对以后新增的轮次是放行的，不用每次发版都回来改配置。
+EXCLUDE_GROUPS_INPUT = os.environ.get("EXCLUDE_GROUPS", "").strip()
+
+
+def parse_groups(raw):
+    return {g.strip() for g in raw.replace("，", ",").split(",") if g.strip()}
 
 # DM=true（默认）：明细按人飞书私信，群里只发一条汇总。
 # DM=false：回到老行为，每个分组在群里发一条完整明细。
@@ -400,19 +408,28 @@ def main():
     if not pairs:
         print(f"没有任何「结果列 + 截图列」配对（SCOPE={SCOPE}），跳过")
         return
+    known = {g for *_r, g in pairs}
     if GROUPS_INPUT:
-        want = {g.strip() for g in GROUPS_INPUT.replace("，", ",").split(",") if g.strip()}
-        known = {g for *_r, g in pairs}
-        unknown = want - known
-        if unknown:
-            print(f"⚠️ groups 里这些分组在表里不存在，已忽略：{'、'.join(sorted(unknown))}"
+        want = parse_groups(GROUPS_INPUT)
+        if want - known:
+            print(f"⚠️ groups 里这些分组在表里不存在，已忽略：{'、'.join(sorted(want - known))}"
                   f"（可选的有 {'、'.join(sorted(known))}）")
         pairs = [x for x in pairs if x[3] in want]
-        if not pairs:
-            print(f"groups={GROUPS_INPUT} 过滤之后没有任何分组可校验，跳过")
-            return
+    if EXCLUDE_GROUPS_INPUT:
+        skip = parse_groups(EXCLUDE_GROUPS_INPUT)
+        if skip - known:
+            print(f"⚠️ exclude_groups 里这些分组在表里不存在，无所谓但提一下："
+                  f"{'、'.join(sorted(skip - known))}")
+        dropped = sorted({g for *_r, g in pairs} & skip)
+        pairs = [x for x in pairs if x[3] not in skip]
+        if dropped:
+            print(f"按 exclude_groups 跳过：{'、'.join(dropped)}")
+    if not pairs:
+        print(f"过滤之后没有任何分组可校验（groups={GROUPS_INPUT!r} "
+              f"exclude_groups={EXCLUDE_GROUPS_INPUT!r}），跳过")
+        return
     scope_desc = f"只看第{only_round}次发版" if only_round else "总验收 + 全部轮次"
-    if GROUPS_INPUT:
+    if GROUPS_INPUT or EXCLUDE_GROUPS_INPUT:
         scope_desc = "、".join(dict.fromkeys(g for *_r, g in pairs))
     print(f"{table_name}：校验范围 {scope_desc}，参与的列 {len(pairs)} 组 → "
           + "、".join(f"{g}/{p}" for _r, _s, p, g in pairs))
