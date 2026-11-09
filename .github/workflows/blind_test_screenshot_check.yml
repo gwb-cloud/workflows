@@ -25,6 +25,14 @@ on:
         description: '校验范围：all=总验收列+所有轮次（默认）/ round=只看当前这一轮发版'
         required: false
         default: ''
+      ignore:
+        description: '加白：确认没问题的图片编号（报告里的 [xxxxxxxx]），逗号分隔，以后不再报'
+        required: false
+        default: ''
+      unignore:
+        description: '取消加白：同样填图片编号，逗号分隔'
+        required: false
+        default: ''
 
 jobs:
   check:
@@ -47,6 +55,8 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           MAX_DOWNLOAD: ${{ github.event.inputs.max_download }}
           SCOPE: ${{ github.event.inputs.scope || 'all' }}
+          IGNORE: ${{ github.event.inputs.ignore }}
+          UNIGNORE: ${{ github.event.inputs.unignore }}
       - name: 提交图片尺寸缓存
         run: |
           git config user.name "github-actions[bot]"

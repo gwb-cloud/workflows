@@ -76,6 +76,36 @@ MAX_DOWNLOAD = env_int("MAX_DOWNLOAD", 300)
 
 STATE_FILE = "screenshot_state.json"
 
+# 加白：确认过没问题的图，以后不再报。存在 state 的 "ignored" 里，跟尺寸缓存一起
+# 提交回仓库，所以加一次就永久生效。
+# 手动触发时用 ignore / unignore 传图片编号（报告里每条疑似后面那个 [xxxxxxxx]），
+# 逗号分隔；也可以传完整 file_token。
+IGNORE_INPUT = os.environ.get("IGNORE", "").strip()
+UNIGNORE_INPUT = os.environ.get("UNIGNORE", "").strip()
+
+
+def short_id(file_token):
+    """报告里给人看的图片编号，取 file_token 前 8 位"""
+    return file_token[:8]
+
+
+def resolve_tokens(raw, known_tokens):
+    """把用户填的编号/完整 token 解析成真正的 file_token。
+    编号是前缀，所以可能撞车或者找不到，都要说清楚，不能默默吞掉"""
+    out, unknown, ambiguous = [], [], []
+    for piece in (raw or "").replace("，", ",").split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        hits = [t for t in known_tokens if t == piece or t.startswith(piece)]
+        if len(hits) == 1:
+            out.append(hits[0])
+        elif not hits:
+            unknown.append(piece)
+        else:
+            ambiguous.append(piece)
+    return out, unknown, ambiguous
+
 DRY_RUN = os.environ.get("DRY_RUN", "").strip().lower() == "true"
 FORCE_SEND = os.environ.get("FORCE_SEND", "").strip().lower() == "true"
 
@@ -335,10 +365,39 @@ def main():
     # ---------- 图片本身的检查 ----------
     state = load_state()
     sizes = state.get("sizes", {})
+    ignored = state.get("ignored", {})
+
+    # 本次跑之前先处理加白/取消加白的输入
+    all_tokens = sorted({t for t, *_ in to_check})
+    if UNIGNORE_INPUT:
+        # 去重：同一个 token 可能既在 ignored 里又在本次的图里，不去重会被当成"编号撞车"
+        hit, unknown, ambi = resolve_tokens(UNIGNORE_INPUT, sorted(set(ignored) | set(all_tokens)))
+        for t in hit:
+            ignored.pop(t, None)
+            print(f"↩️ 取消加白 {short_id(t)}")
+        for t in unknown:
+            print(f"⚠️ 取消加白失败：找不到编号 {t}")
+        for t in ambi:
+            print(f"⚠️ 取消加白失败：编号 {t} 对应多张图，请填完整 file_token")
+    if IGNORE_INPUT:
+        hit, unknown, ambi = resolve_tokens(IGNORE_INPUT, all_tokens)
+        for t in hit:
+            ignored[t] = now.strftime("%Y-%m-%d")
+            print(f"✅ 已加白 {short_id(t)}")
+        for t in unknown:
+            print(f"⚠️ 加白失败：这次的图里找不到编号 {t}（只能加白本次报告里出现过的图）")
+        for t in ambi:
+            print(f"⚠️ 加白失败：编号 {t} 对应多张图，请填完整 file_token")
+
     wrong = defaultdict(list)     # 人 → [问题描述]
     downloaded = 0
+    from_cache = 0
+    ignored_hits = 0
     seen = set()
     for ft, fname, mime, owner, group, platform in to_check:
+        if ft in ignored:
+            ignored_hits += 1
+            continue
         if mime and not mime.startswith("image/"):
             wrong[owner].append(f"{group}-{platform} 放的不是图片（{fname or mime}）")
             continue
@@ -348,26 +407,31 @@ def main():
         if ft not in sizes:
             if downloaded >= MAX_DOWNLOAD:
                 continue
-            size = download_size(token, ft)
+            fetched = download_size(token, ft)
             downloaded += 1
-            if size:
-                sizes[ft] = list(size)
+            if fetched:
+                sizes[ft] = list(fetched)
+        else:
+            from_cache += 1
         size = sizes.get(ft)
         if not size:
             continue
         w, h = size
         if platform == "Mac" and h > w:
-            wrong[owner].append(f"{group}-Mac 截图是竖图（{w}×{h}，疑似手机截图）")
+            wrong[owner].append(f"{group}-Mac 截图是竖图（{w}×{h}，疑似手机截图）[{short_id(ft)}]")
         elif platform == "iPhone" and w > h:
-            wrong[owner].append(f"{group}-iPhone 截图是横图（{w}×{h}，疑似电脑截图）")
+            wrong[owner].append(f"{group}-iPhone 截图是横图（{w}×{h}，疑似电脑截图）[{short_id(ft)}]")
 
     for ft, refs in shot_refs.items():
+        if ft in ignored:
+            continue
         rows = len({(o, g, p) for o, g, p in refs})
         if len(refs) >= DUP_THRESHOLD and rows >= DUP_THRESHOLD:
             owner = refs[0][0]
-            wrong[owner].append(f"同一张图被用在 {len(refs)} 处")
+            wrong[owner].append(f"同一张图被用在 {len(refs)} 处 [{short_id(ft)}]")
 
     state["sizes"] = sizes
+    state["ignored"] = ignored
     state["last_run"] = now.strftime("%Y-%m-%d %H:%M")
     save_state(state)
 
@@ -375,7 +439,8 @@ def main():
     miss_total = sum(sum(v.values()) for v in missing.values())
     wrong_total = sum(len(v) for v in wrong.values())
     lines = [f"📸 盲测截图校验｜{table_name}｜{now:%m-%d}｜{scope_desc}",
-             f"已填截图 {filled_total} 处，本次实际下载检查 {downloaded} 张"]
+             f"已填截图 {filled_total} 处，本次下载 {downloaded} 张 + 读缓存 {from_cache} 张"
+             + (f"，跳过已加白 {ignored_hits} 处" if ignored_hits else "")]
     at_names = []
 
     if miss_total:
@@ -402,6 +467,8 @@ def main():
         lines.append("\n✅ 没有发现放错的截图")
 
     lines.append("\n规则：结果填了「通过」或「不通过」就要配截图；「待验收」「不涉及或无此需求」不用。")
+    if wrong_total:
+        lines.append("截图确认没问题的，拿后面那个 [编号] 去 Actions 手动触发本流程、填进 ignore，以后不再报。")
     text = "\n".join(lines)
 
     if DRY_RUN:
