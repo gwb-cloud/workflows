@@ -65,6 +65,12 @@ def parse_groups(raw):
 SEND_DM = os.environ.get("DM", "true").strip().lower() != "false"
 BASE_URL = f"https://pcnpuds47gj5.feishu.cn/base/{BLIND_TEST_APP_TOKEN}"
 
+
+def table_url(table_id):
+    """直接定位到当月那张表。table_id 是按 M{月}验收表 查出来的，
+    所以 12 月会自动指到 M12验收表，不用改代码"""
+    return f"{BASE_URL}?table={table_id}"
+
 FIELD_OWNER = "验收人"
 
 
@@ -578,6 +584,7 @@ def main():
                     at_names.append(owner)
 
         lines.append("\n规则：结果填了「通过」或「不通过」就要配截图；「待验收」「不涉及或无此需求」不用。")
+        lines.append(f"{table_name}：{table_url(table_id)}")
         if wrong_total:
             lines.append("截图确认没问题的，拿后面那个 [编号] 去 Actions 手动触发本流程、填进 ignore，以后不再报。")
         return "\n".join(lines), at_names
@@ -622,7 +629,7 @@ def main():
                     lines.append(f"· …另有 {wrong_total - shown} 处")
             lines.append("\n规则：结果填了「通过」或「不通过」就要配截图；"
                          "「待验收」「不涉及或无此需求」不用。")
-            lines.append(f"表格：{BASE_URL}")
+            lines.append(f"{table_name}：{table_url(table_id)}")
             if wrong_total:
                 lines.append("截图确认没问题的，拿后面那个 [编号] 去 Actions "
                              "手动触发「盲测截图校验」、填进 ignore，以后不再报。")
@@ -632,7 +639,8 @@ def main():
                         key=lambda o: -sum(person_total(o)))
         if not people:
             text = (f"📸 盲测截图校验｜{table_name}｜{now:%m-%d}｜{scope_desc}\n"
-                    f"✅ 全部通过：没有漏填，也没有发现放错的截图")
+                    f"✅ 全部通过：没有漏填，也没有发现放错的截图\n"
+                    f"{table_name}：{table_url(table_id)}")
             if DRY_RUN:
                 print("\n== DRY RUN ==（不发送）\n" + text)
             else:
@@ -677,6 +685,7 @@ def main():
                 by_group.append(f"{group} {g}")
         if by_group:
             lines.append("\n按分组：" + "、".join(by_group))
+        lines.append(f"\n{table_name}：{table_url(table_id)}")
         if dm_fail:
             lines.append("\n⚠️ 这些人私信没发出去，请手动通知："
                          + "、".join(f"{o}（{e}）" for o, e in dm_fail))
