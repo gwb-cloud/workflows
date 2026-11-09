@@ -308,6 +308,65 @@ def check_consistency(records):
     return out
 
 
+# ---------- 盲测 ↔ 问题池 交叉校验 ----------
+# 关联键：问题池「来源用例编号」填当月验收表「目标」列那个 ID（= 用例库主键）。
+# 这是两张表之间唯一的关联，2026-11-09 建立，之前完全没有交叉校验。
+BLIND_TEST_APP_TOKEN = "FnFab3FDKa0JU6sqa19cDVpHnM7"
+CASE_LIB_TABLE_ID = "tbl46z8GYP5HN1MJ"      # 盲测用例库
+FIELD_CASE_REF = "来源用例编号"
+FIELD_CASE_ID = "主键"                       # 用例库里的唯一 ID
+FAIL_RESULTS = {"不通过"}                    # 跟 blind_test_screenshot_check 的口径一致
+
+
+def find_blind_test_table(token, now):
+    """当月验收表叫 M{月}验收表，找不到返回 None（月初还没建表时会这样）"""
+    want = f"M{now.month}验收表"
+    url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/"
+           f"{BLIND_TEST_APP_TOKEN}/tables")
+    data = api("GET", url, token=token, params={"page_size": 100})
+    if data.get("code") != 0:
+        raise RuntimeError(f"拉取数据表列表失败：{data}")
+    for t in data["data"]["items"]:
+        if t.get("name") == want:
+            return t["table_id"]
+    return None
+
+
+def parse_case_refs(rec):
+    """「来源用例编号」允许一条问题关联多个用例，逗号分隔"""
+    raw_text = sel(rec, FIELD_CASE_REF)
+    if not raw_text:
+        return []
+    return [x.strip() for x in raw_text.replace("，", ",").split(",") if x.strip()]
+
+
+def check_blind_test_link(records, month_rows, case_ids):
+    """两个方向：①填的编号用例库里有没有 ②盲测挂了的用例问题池有没有录"""
+    out = []
+
+    bad = [r for r in records
+           if any(ref not in case_ids for ref in parse_case_refs(r))]
+    if bad:
+        out.append((f"「{FIELD_CASE_REF}」填的编号在用例库里不存在", bad))
+
+    if month_rows is None:
+        return out
+    linked = {ref for r in records for ref in parse_case_refs(r)}
+    missing = []
+    for row in month_rows:
+        case_id = sel(row, "目标")
+        if not case_id or case_id in linked:
+            continue
+        failed = [p for p in ("Mac", "iPhone")
+                  if sel(row, f"{p}验收结果") in FAIL_RESULTS]
+        if failed:
+            # 伪装成一条记录，好让 fmt()/key_of() 直接用用例 ID 当主键展示
+            missing.append({"fields": {"主键": case_id}})
+    if missing:
+        out.append(("盲测标了「不通过」，但问题池里没有对应记录（疑似漏录）", missing))
+    return out
+
+
 def check_overdue(records, today):
     """3.8 过了计划修复时间还停在待修复 —— 要 @ 技术负责人"""
     hits = []
@@ -344,12 +403,28 @@ def main():
     consistency = check_consistency(records)
     overdue = check_overdue(records, today)
 
+    # 盲测交叉校验：拿不到盲测表就跳过这一节，不要让整个巡检挂掉
+    cross = []
+    try:
+        case_ids = {sel(r, FIELD_CASE_ID)
+                    for r in get_all_records(token, BLIND_TEST_APP_TOKEN, CASE_LIB_TABLE_ID)}
+        case_ids.discard("")
+        month_table = find_blind_test_table(token, now)
+        month_rows = (get_all_records(token, BLIND_TEST_APP_TOKEN, month_table)
+                      if month_table else None)
+        cross = check_blind_test_link(records, month_rows, case_ids)
+        print(f"盲测交叉校验：用例库 {len(case_ids)} 条 ID，"
+              f"当月表 {len(month_rows) if month_rows else 0} 条")
+    except Exception as e:
+        print(f"⚠️ 盲测交叉校验跳过（{e}）")
+
     lines = [f"🧹 问题池规则巡检｜{now:%m-%d}｜共 {total} 条"]
     at_names = []
 
     for label, icon, groups in (("必填缺失", "🔴", required),
                                 ("条件必填", "🟠", conditional),
-                                ("字段互相矛盾", "🟡", consistency)):
+                                ("字段互相矛盾", "🟡", consistency),
+                                ("盲测关联", "🔗", cross)):
         lines.append(f"\n{icon} {label}：")
         if groups:
             for title, hits in sorted(groups, key=lambda g: -len(g[1])):
