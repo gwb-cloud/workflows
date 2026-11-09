@@ -27,7 +27,7 @@ import time
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
-from beehive_people import beehive_send, DEPARTED
+from beehive_people import beehive_send, beehive_id, display_name, DEPARTED
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 
@@ -49,6 +49,12 @@ REQUIRED_FIELDS = [
 ]
 
 # 废弃字段，不校验（即使有空值也不报）
+# 报告"以人为本"：按提出人 / 问题负责人小组分别发，每个人只看自己要补什么。
+# 近 N 天之外的当历史存量，不再打扰 —— 太老的问题多半已经不存在了。
+FRESH_DAYS = int(os.environ.get("FRESH_DAYS", "").strip() or 60)
+# 必填只对「待修复」强制。已修复/未重现/不需修复 这些状态下补字段没有意义。
+REQUIRED_ONLY_STATUS = "待修复"
+
 DEPRECATED_FIELDS = {"一级模块", "二级模块"}
 
 # 这些值长得像填了，其实是默认值/占位符，一律当空
@@ -216,6 +222,79 @@ def owner_names(rec, name="技术负责人"):
 
 # ========== 规则判定 ==========
 
+def is_fresh(rec, today):
+    """只看近 FRESH_DAYS 天提出的问题。更早的当历史存量，不再打扰"""
+    d = as_date(rec, "问题提出时间")
+    return d is not None and (today - d).days <= FRESH_DAYS
+
+
+def owner_team(rec):
+    """「问题负责人」是从模块表 lookup 出来的，值形如 "爱德 Lexia"，本身就是一个小组。
+    按组聚合、组内几位一起 @，而不是拆成个人 —— 拆开会把同一条问题重复计好几遍"""
+    return text_of(raw(rec, "问题负责人"))
+
+
+def reporter_consistency(rec):
+    """录入时就该填对的一致性问题，归提出人"""
+    out = []
+    module, platform = sel(rec, "模块"), sel(rec, "应用端")
+    want = MODULE_TO_PLATFORM.get(module) or ("Web" if "后台" in module else None)
+    if want and platform and platform != want:
+        out.append(f"模块「{module}」的应用端应该是 {want}，填成了 {platform}")
+    version = sel(rec, "首次发现版本号")
+    want2 = next((p for prefix, p in VERSION_PREFIX_TO_PLATFORM.items()
+                  if version.startswith(prefix)), None)
+    if want2 and platform and platform != want2:
+        out.append(f"版本号「{version}」的应用端应该是 {want2}，填成了 {platform}")
+    return out
+
+
+def owner_items(rec, status):
+    """推进过程中该补的，归问题负责人小组"""
+    out = []
+    if sel(rec, "是否要改设计") == "是" and is_blank(rec, "设计稿链接") and is_blank(rec, "设计稿图片"):
+        out.append("要改设计，但设计稿链接和图片都没填")
+    if sel(rec, "进Sprint解决").startswith("SP"):
+        for name in ("计划修复时间", "技术负责人"):
+            if is_blank(rec, name):
+                out.append(f"已进 Sprint，但 {name} 没填")
+    if status == "已修复" and is_blank(rec, "上线日期"):
+        out.append("已修复，但上线日期没填")
+    allowed = STATUS_TO_VERIFY.get(status)
+    if allowed and sel(rec, "负责人验证") not in allowed:
+        want = "/".join(sorted(allowed))
+        now_v = sel(rec, "负责人验证") or "空"
+        out.append(f"处理状态={status} → 负责人验证应为「{want}」，现在是「{now_v}」")
+    if status in ALWAYS_REVIEW_STATUS:
+        out.append(f"处理状态={status}（{ALWAYS_REVIEW_STATUS[status]}）")
+    if status in UNFINISHED_STATUS and any(n in DEPARTED for n in owner_names(rec)):
+        out.append("技术负责人已离职，没人会收到到期提醒")
+    return out
+
+
+def render_people(title, data, unit, tail):
+    """一个人/一组一段。返回 (正文, 要@的人)；没内容返回 (None, [])"""
+    if not data:
+        return None, []
+    keys = sorted(data, key=lambda g: -sum(len(v) for v in data[g].values()))
+    body, ats, grand = [], [], 0
+    for g in keys:
+        names = [n for n in g.split() if n]          # 小组是空格分隔的几个人
+        label = "".join(f"@{display_name(n)}" for n in names if beehive_id(n))
+        ats += [n for n in names if beehive_id(n)]
+        if not label:
+            continue
+        n_total = sum(len(v) for v in data[g].values())
+        grand += n_total
+        body.append(f"\n{label}（{n_total} 处）")
+        for item, ks in sorted(data[g].items(), key=lambda kv: -len(kv[1])):
+            more = f" 另有{len(ks) - MAX_KEYS}条" if len(ks) > MAX_KEYS else ""
+            body.append(f"  · {item}：{len(ks)} 处｜{unit} {'/'.join(ks[:MAX_KEYS])}{more}")
+    if not body:
+        return None, []
+    return f"{title}｜近 {FRESH_DAYS} 天共 {grand} 处\n" + "\n".join(body) + tail, ats
+
+
 def check_required(records):
     out = []
     for name in REQUIRED_FIELDS:
@@ -360,8 +439,10 @@ def check_blind_test_link(records, month_rows, case_ids):
         failed = [p for p in ("Mac", "iPhone")
                   if sel(row, f"{p}验收结果") in FAIL_RESULTS]
         if failed:
-            # 伪装成一条记录，好让 fmt()/key_of() 直接用用例 ID 当主键展示
-            missing.append({"fields": {"主键": case_id}})
+            # 伪装成一条记录：主键放用例 ID，验收人原样带过来，
+            # 这样报告里能按验收人 @ 到具体的人
+            missing.append({"fields": {"主键": case_id,
+                                       "验收人": row.get("fields", {}).get("验收人")}})
     if missing:
         out.append(("盲测标了「不通过」，但问题池里没有对应记录（疑似漏录）", missing))
     return out
@@ -418,43 +499,67 @@ def main():
     except Exception as e:
         print(f"⚠️ 盲测交叉校验跳过（{e}）")
 
-    lines = [f"🧹 问题池规则巡检｜{now:%m-%d}｜共 {total} 条"]
-    at_names = []
+    # ---------- 按人/按组归集，分三条消息发 ----------
+    reporter = defaultdict(lambda: defaultdict(list))   # 提出人 → 问题 → [主键]
+    groups = defaultdict(lambda: defaultdict(list))     # 负责人小组 → 问题 → [主键]
 
-    for label, icon, groups in (("必填缺失", "🔴", required),
-                                ("条件必填", "🟠", conditional),
-                                ("字段互相矛盾", "🟡", consistency),
-                                ("盲测关联", "🔗", cross)):
-        lines.append(f"\n{icon} {label}：")
-        if groups:
-            for title, hits in sorted(groups, key=lambda g: -len(g[1])):
-                lines.append(fmt(title, hits, total))
+    for r in records:
+        if not is_fresh(r, today):
+            continue
+        k, status = key_of(r), sel(r, "处理状态")
+
+        rep = (owner_names(r, "提出人") or [None])[0]
+        # @ 不到的人（离职、高管）报了也没用，直接跳过
+        if rep and beehive_id(rep):
+            if status == REQUIRED_ONLY_STATUS:
+                for name in REQUIRED_FIELDS:
+                    if name == "提出人":
+                        continue
+                    if is_blank(r, name):
+                        reporter[rep][f"{name} 没填"].append(k)
+            for title in reporter_consistency(r):
+                reporter[rep][title].append(k)
+
+        team = owner_team(r)
+        if team:
+            for title in owner_items(r, status):
+                groups[team][title].append(k)
+
+    msg_reporter, at_reporter = render_people(
+        f"🧹 问题池巡检 · 录入质量（提出人）", reporter, "主键",
+        f"\n\n说明：只看「{REQUIRED_ONLY_STATUS}」且近 {FRESH_DAYS} 天提出的问题。"
+        f"\n📋 问题池：{ISSUE_TABLE_URL}")
+    msg_owner, at_owner = render_people(
+        f"🧹 问题池巡检 · 推进质量（问题负责人）", groups, "主键",
+        "\n\n说明：按模块负责小组 @，组内几位一起收到，认领后处理即可。"
+        f"\n📋 问题池：{ISSUE_TABLE_URL}")
+    blind_data = {}
+    for title, hits in cross:
+        for r in hits:
+            who = (owner_names(r, "验收人") or owner_names(r, "提出人") or [""])[0]
+            if who and beehive_id(who):
+                blind_data.setdefault(who, defaultdict(list))[title].append(key_of(r))
+    msg_blind, at_blind = render_people(
+        "🔗 盲测漏录（验收人）", blind_data, "用例",
+        "\n\n录进问题池时，把用例编号填进「来源用例编号」即可消除。")
+
+    # 逾期清单跟着研发群那条走，这里不再重复发（见 issue_plan_due_notify.py）
+    print(f"逾期未修 {len(overdue)} 条（由研发群那条提醒负责，这里不发）")
+
+    sent = 0
+    for tag, text, ats in (("录入质量", msg_reporter, at_reporter),
+                           ("推进质量", msg_owner, at_owner),
+                           ("盲测漏录", msg_blind, at_blind)):
+        if text is None:
+            print(f"✅ {tag}：没有要报的，不发")
+            continue
+        sent += 1
+        if DRY_RUN:
+            print(f"\n== DRY RUN ==（不发送）第 {sent} 条 / {tag}\n{text}\n待 @ 的人：{ats}")
         else:
-            lines.append("- 无")
-
-    # 到期当天的提醒由飞书自动化「计划修复时间到期提醒技术负责人」私聊研发，这里只报已经
-    # 逾期的兜底清单给群里。研发基本都不在这个群、也不在 PERSON_BEEHIVE_ID 里，所以不 @，
-    # 直接写名字——硬 @ 只会退化成"（缺蜂巢账号，未能提醒）"，反而更吵
-    lines.append("\n⏰ 过了计划修复时间还停在待修复：")
-    if overdue:
-        by_owner = {}
-        for r in overdue:
-            for n in (owner_names(r) or ["未指派技术负责人"]):
-                by_owner.setdefault(n, []).append(key_of(r))
-        for name, keys in sorted(by_owner.items(), key=lambda kv: -len(kv[1])):
-            shown = "/".join(keys[:MAX_KEYS]) + (f" 另有{len(keys) - MAX_KEYS}条" if len(keys) > MAX_KEYS else "")
-            lines.append(f"- {name}：{len(keys)} 条｜主键 {shown}")
-    else:
-        lines.append("- 无")
-
-    lines.append(f"\n📋 问题池：{ISSUE_TABLE_URL}")
-
-    text = "\n".join(lines)
-    print(text)
-    if DRY_RUN:
-        print("\n== DRY RUN ==（不发送）")
-        return
-    beehive_send(text, at_names)
+            beehive_send(text, ats)
+    if sent == 0 and not DRY_RUN:
+        beehive_send(f"🧹 问题池巡检｜{now:%m-%d}｜近 {FRESH_DAYS} 天没有发现问题 ✅", [])
 
 
 if __name__ == "__main__":

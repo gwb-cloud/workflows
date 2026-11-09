@@ -133,6 +133,17 @@ def key_of(rec):
     return text_of(rec.get("fields", {}).get("主键")) or rec.get("record_id", "?")
 
 
+def is_blank(rec, name):
+    value = rec.get("fields", {}).get(name)
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple)):
+        return not value
+    return False
+
+
 def group_by_owner(records):
     """人 → 主键列表；没填技术负责人的归到 None"""
     out = defaultdict(list)
@@ -154,12 +165,12 @@ def render(title, records, lines, at_names):
     unassigned = grouped.pop(None, [])
     lines.append(f"\n{title}（{len(records)} 条）：")
     for name, keys in sorted(grouped.items(), key=lambda kv: -len(kv[1])):
-        shown = "/".join(keys[:MAX_KEYS]) + (f" 等{len(keys)}条" if len(keys) > MAX_KEYS else "")
+        shown = "/".join(keys[:MAX_KEYS]) + (f" 另有{len(keys) - MAX_KEYS}条" if len(keys) > MAX_KEYS else "")
         lines.append(f"- {dev_mention(name)}：{len(keys)} 条｜主键 {shown}")
         if dev_beehive_id(name):
             at_names.append(name)
     if unassigned:
-        shown = "/".join(unassigned[:MAX_KEYS]) + (f" 等{len(unassigned)}条" if len(unassigned) > MAX_KEYS else "")
+        shown = "/".join(unassigned[:MAX_KEYS]) + (f" 另有{len(unassigned) - MAX_KEYS}条" if len(unassigned) > MAX_KEYS else "")
         lines.append(f"- ⚠️ 没填技术负责人，没人会收到提醒：{len(unassigned)} 条｜主键 {shown}")
 
 
@@ -174,10 +185,16 @@ def main():
     records = get_all_records(token, ISSUE_APP_TOKEN, ISSUE_TABLE_ID)
     print(f"共 {len(records)} 条记录")
 
-    due_today, overdue = [], []
+    due_today, overdue, unplanned = [], [], []
     for r in records:
         if sel(r, "处理状态") not in UNFINISHED:
             continue
+        # 已进 Sprint 却没配技术负责人 / 没排计划修复时间 —— 这类谁都催不到：
+        # 飞书的到期提醒按技术负责人发，没人就不发；没有计划修复时间更是连到期都算不出来。
+        # 问题池周报也会报一份给问题负责人，两边都报是故意的。
+        if sel(r, "进Sprint解决").startswith("SP") and (
+                is_blank(r, "技术负责人") or is_blank(r, "计划修复时间")):
+            unplanned.append(r)
         plan = as_date(r, "计划修复时间")
         if not plan:
             continue
@@ -186,8 +203,9 @@ def main():
         elif plan < today:
             overdue.append(r)
 
-    print(f"今天到期 {len(due_today)} 条，已逾期 {len(overdue)} 条")
-    if not due_today and not overdue:
+    print(f"今天到期 {len(due_today)} 条，已逾期 {len(overdue)} 条，"
+          f"进Sprint但没配人/没排期 {len(unplanned)} 条")
+    if not due_today and not overdue and not unplanned:
         print("没有要催的，不发送")
         return
 
@@ -195,6 +213,15 @@ def main():
     at_names = []
     render("📌 今天到期", due_today, lines, at_names)
     render("🔴 已经逾期", overdue, lines, at_names)
+    if unplanned:
+        lines.append(f"\n⚠️ 已进 Sprint 但没配技术负责人或没排计划修复时间：{len(unplanned)} 条")
+        miss_owner = [r for r in unplanned if is_blank(r, "技术负责人")]
+        miss_plan = [r for r in unplanned if is_blank(r, "计划修复时间")]
+        for label, group in (("没配技术负责人", miss_owner), ("没排计划修复时间", miss_plan)):
+            if group:
+                keys = [key_of(r) for r in group[:MAX_KEYS]]
+                more = f" 另有{len(group) - MAX_KEYS}条" if len(group) > MAX_KEYS else ""
+                lines.append(f"- {label}：{len(group)} 条｜主键 {'/'.join(keys)}{more}")
     lines.append("\n修完记得把「处理状态」改成已修复，并填上「上线日期」。")
     lines.append(f"📋 问题池：{ISSUE_TABLE_URL}")
 
