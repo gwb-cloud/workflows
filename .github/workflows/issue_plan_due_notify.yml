@@ -1,0 +1,37 @@
+name: 修复进度提醒（研发群）
+
+on:
+  schedule:
+    - cron: '30 1 * * 1-5'   # UTC 1:30 = 北京时间上午9:30，周一到周五
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只打印不发群，填 true'
+        required: false
+        default: ''
+      force_send:
+        description: '周末也发，填 true'
+        required: false
+        default: ''
+      max_keys:
+        description: '每人最多列几个主键（默认10）'
+        required: false
+        default: ''
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python issue_plan_due_notify.py
+        env:
+          FEISHU_APP_ID_CLI: ${{ secrets.FEISHU_APP_ID_CLI }}
+          FEISHU_APP_SECRET_CLI: ${{ secrets.FEISHU_APP_SECRET_CLI }}
+          BEEHIVE_WEBHOOK_DEV: ${{ secrets.BEEHIVE_WEBHOOK_DEV }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          FORCE_SEND: ${{ github.event.inputs.force_send }}
+          MAX_KEYS: ${{ github.event.inputs.max_keys }}
