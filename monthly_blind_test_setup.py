@@ -29,6 +29,10 @@ ROSTER_TABLE_ID = "tblbuVpl9xK3E0Rc"      # 人员名单
 SOURCE_TABLE_ID = "tbl46z8GYP5HN1MJ"      # 原始目标表（盲测用例库）
 
 FIELD_SOURCE_TARGET = "目标"
+# 用例库的唯一 ID。当月表的「目标」列放这个 ID，描述放到「目标描述」列。
+# 这样当月表和用例库、问题池之间才有稳定的关联键 —— 以前只有描述文本，
+# 文本一改链条就断，而且没法从问题池指回某条用例。
+FIELD_SOURCE_ID = "主键"
 FIELD_SOURCE_MODULE = "二级模块"
 
 # 新建月度验收表的字段结构。type 编号是飞书官方定义：
@@ -52,7 +56,8 @@ ROUND_IPHONE_SHOT = "第{n}次发版-iPhone截图"
 
 def build_new_table_fields(module_options):
     fields = [
-        {"field_name": "目标", "type": 1},
+        {"field_name": "目标", "type": 1},          # 存用例库主键 ID，不是描述
+        {"field_name": "目标描述", "type": 1},      # 描述原文
         {"field_name": "二级模块", "type": 3, "property": {"options": module_options}},
         {"field_name": "是否主流程", "type": 3, "property": {"options": [
             {"name": "是"}, {"name": "否"}
@@ -317,16 +322,26 @@ def main():
     print(f"用例库共 {len(source_records)} 条")
 
     records_to_insert = []
+    missing_id = []
     for i, r in enumerate(source_records):
         fields = r["fields"]
         target = get_text_value(fields, FIELD_SOURCE_TARGET)
+        case_id = get_text_value(fields, FIELD_SOURCE_ID)
+        if not case_id:
+            missing_id.append(target[:40])
         module = get_select_value(fields, FIELD_SOURCE_MODULE)
         owner_name = new_order[i % len(new_order)]
         records_to_insert.append({
-            "目标": target,
+            "目标": case_id,        # ID
+            "目标描述": target,     # 描述原文
             "二级模块": module,
             "验收人": name_to_field_value[owner_name],
         })
+    if missing_id:
+        # 没 ID 的用例建出来就是断链的，宁可停下让人先去补，也不要默默写进去
+        raise RuntimeError(
+            f"用例库有 {len(missing_id)} 条没有「{FIELD_SOURCE_ID}」，建表会产生断链的行，"
+            f"先去补齐再跑。样例：{missing_id[:5]}")
 
     batch_create_records(token, new_table_id, records_to_insert)
     print(f"{target_table_name} 已写入 {len(records_to_insert)} 条用例")

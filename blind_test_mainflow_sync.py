@@ -26,7 +26,9 @@ FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET_CLI"]
 BASE_APP_TOKEN = "FnFab3FDKa0JU6sqa19cDVpHnM7"
 SOURCE_TABLE_ID = "tbl46z8GYP5HN1MJ"      # 原始目标表（用例库）
 
-FIELD_TARGET = "目标"
+FIELD_TARGET = "目标"          # 当月表：现在存的是用例库主键 ID
+FIELD_TARGET_DESC = "目标描述"  # 当月表：描述原文
+FIELD_SOURCE_ID = "主键"        # 用例库：唯一 ID
 FIELD_MAINFLOW = "是否主流程"
 FIELD_TAG = "本次抽检版本号"
 
@@ -170,8 +172,26 @@ def get_text_value(fields, field_name):
     return ""
 
 
+def norm(text):
+    return (text or "").replace("　", " ").strip()
+
+
 def target_key(fields):
-    return get_text_value(fields, FIELD_TARGET).replace("　", " ").strip()
+    """当月表的匹配键 = 目标列（2026-11 起是用例库主键 ID）"""
+    return norm(get_text_value(fields, FIELD_TARGET))
+
+
+def target_desc(fields):
+    """描述兜底：老月份的表「目标」里还是描述，且没有「目标描述」列"""
+    return norm(get_text_value(fields, FIELD_TARGET_DESC)) or target_key(fields)
+
+
+def source_id(fields):
+    return norm(get_text_value(fields, FIELD_SOURCE_ID))
+
+
+def source_desc(fields):
+    return norm(get_text_value(fields, FIELD_TARGET))
 
 
 def mainflow_raw(fields):
@@ -228,16 +248,21 @@ def main():
     target_records = get_all_records(token, table_id)
     print(f"原始目标表 {len(source_records)} 条，{table_name} {len(target_records)} 条")
 
-    # 源表：目标 → 是否主流程
-    src_value, conflicts = {}, set()
+    # 源表建两份索引：主键 ID 为主，描述为兜底（老月份的表还没有 ID）
+    src_value, src_by_desc, conflicts = {}, {}, set()
     for r in source_records:
-        key = target_key(r["fields"])
         value = mainflow_raw(r["fields"])
-        if key in src_value and src_value[key] != value:
-            conflicts.add(key)
-        src_value.setdefault(key, value)
+        cid = source_id(r["fields"])
+        if cid:
+            src_value[cid] = value
+        d = source_desc(r["fields"])
+        if d:
+            if d in src_by_desc and src_by_desc[d] != value:
+                conflicts.add(d)
+            src_by_desc.setdefault(d, value)
     if conflicts:
-        print(f"⚠️ 源表有 {len(conflicts)} 个目标重复且「{FIELD_MAINFLOW}」取值不一致，按第一条为准")
+        print(f"⚠️ 源表有 {len(conflicts)} 个描述重复且「{FIELD_MAINFLOW}」取值不一致，按第一条为准")
+    print(f"源表索引：按 ID {len(src_value)} 条，按描述 {len(src_by_desc)} 条")
 
     target_fields = get_fields(token, table_id)
     tgt_mainflow = find_field(target_fields, FIELD_MAINFLOW)
@@ -251,11 +276,17 @@ def main():
     for r in target_records:
         key = target_key(r["fields"])
         fields_to_write = {}
-        if key not in src_value:
-            missing_in_source.append(key)
-            stat["源表没有此目标"] += 1
-            continue
-        want = src_value[key]
+        if key in src_value:
+            want = src_value[key]
+        else:
+            # 兜底：按描述匹配（老月份的表，或者还没转成 ID 的行）
+            d = target_desc(r["fields"])
+            if d not in src_by_desc:
+                missing_in_source.append(key)
+                stat["源表没有此目标"] += 1
+                continue
+            want = src_by_desc[d]
+            stat["靠描述兜底匹配"] += 1
         if not same_value(mainflow_raw(r["fields"]), want):
             fields_to_write[FIELD_MAINFLOW] = want
             stat["同步是否主流程"] += 1
