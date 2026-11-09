@@ -25,6 +25,10 @@ on:
         description: '校验范围：all=总验收列+所有轮次（默认）/ round=只看当前这一轮发版'
         required: false
         default: ''
+      dm:
+        description: '明细发私信：true=按人飞书私信+群里只放总数（默认）/ false=群里发完整明细'
+        required: false
+        default: ''
       groups:
         description: '只校验哪些分组，逗号分隔，如「总验收」或「总验收,第1次发版」。留空=用下面的默认值'
         required: false
@@ -62,6 +66,8 @@ jobs:
           # 2026-11 现状：第1/2次发版的欠账不补了，只催总验收的 Mac + iPhone。
           # 等以后要恢复催各轮发版，把这里的默认值改成空字符串即可。
           GROUPS: ${{ github.event.inputs.groups || '总验收' }}
+          # 明细按人私信（走飞书，蜂巢还没有私信能力），群里只发总数
+          DM: ${{ github.event.inputs.dm || 'true' }}
           IGNORE: ${{ github.event.inputs.ignore }}
           UNIGNORE: ${{ github.event.inputs.unignore }}
       - name: 提交图片尺寸缓存

@@ -51,6 +51,12 @@ SCOPE = os.environ.get("SCOPE", "round").strip().lower()
 # 不用改 SCOPE 也不用改代码。
 GROUPS_INPUT = os.environ.get("GROUPS", "").strip()
 
+# DM=true（默认）：明细按人飞书私信，群里只发一条汇总。
+# DM=false：回到老行为，每个分组在群里发一条完整明细。
+# 蜂巢暂时没有私信能力，所以私信走飞书；群消息还是走蜂巢。
+SEND_DM = os.environ.get("DM", "true").strip().lower() != "false"
+BASE_URL = f"https://pcnpuds47gj5.feishu.cn/base/{BLIND_TEST_APP_TOKEN}"
+
 FIELD_OWNER = "验收人"
 
 
@@ -236,6 +242,27 @@ def get_person_name(fields, field_name):
     return "未知"
 
 
+def get_person(fields, field_name):
+    """返回 (姓名, 飞书 open_id)。人员字段自带 open_id，发私信不需要另外维护映射表"""
+    value = fields.get(field_name)
+    if isinstance(value, list) and value:
+        first = value[0]
+        if isinstance(first, dict):
+            return first.get("name", "未知"), first.get("id") or ""
+    return "未知", ""
+
+
+def send_feishu_dm(token, open_id, text):
+    """给单个人发飞书私聊文本消息。需要应用开通 im:message:send_as_bot 权限"""
+    data = api("POST", "https://open.feishu.cn/open-apis/im/v1/messages",
+               token=token, params={"receive_id_type": "open_id"},
+               body={"receive_id": open_id, "msg_type": "text",
+                     "content": json.dumps({"text": text}, ensure_ascii=False)})
+    if data.get("code") != 0:
+        return False, f"code={data.get('code')} {data.get('msg')}"
+    return True, ""
+
+
 def get_attachments(fields, field_name):
     value = fields.get(field_name)
     return [a for a in value if isinstance(a, dict)] if isinstance(value, list) else []
@@ -399,10 +426,13 @@ def main():
     to_check = []                                        # 待下载检查的图
     filled = defaultdict(int)                            # 组 → 已填截图数
     group_order = list(dict.fromkeys(g for *_r, g in pairs))
+    owner_open_id = {}                                   # 姓名 → 飞书 open_id
 
     for r in records:
         fields = r["fields"]
-        owner = get_person_name(fields, FIELD_OWNER)
+        owner, open_id = get_person(fields, FIELD_OWNER)
+        if open_id:
+            owner_open_id.setdefault(owner, open_id)
         for result_name, shot_name, platform, group in pairs:
             if get_select_value(fields, result_name).strip() not in RESULT_NEED_SHOT:
                 continue
@@ -535,6 +565,114 @@ def main():
             lines.append("截图确认没问题的，拿后面那个 [编号] 去 Actions 手动触发本流程、填进 ignore，以后不再报。")
         return "\n".join(lines), at_names
 
+    # ---------- DM 模式：明细私信给本人，群里只发一条汇总 ----------
+    if SEND_DM:
+        # 把 组→人 的统计翻成 人→组，每个人只看自己那份
+        per_person = defaultdict(lambda: {"miss": defaultdict(dict), "wrong": defaultdict(list)})
+        for group in group_order:
+            for owner, detail in (missing.get(group) or {}).items():
+                per_person[owner]["miss"][group] = dict(detail)
+            for owner, items in (wrong.get(group) or {}).items():
+                per_person[owner]["wrong"][group] = list(items)
+
+        def person_total(owner):
+            d = per_person[owner]
+            miss = sum(sum(v.values()) for v in d["miss"].values())
+            bad = sum(len(v) for v in d["wrong"].values())
+            return miss, bad
+
+        def build_dm(owner):
+            d = per_person[owner]
+            miss_total, wrong_total = person_total(owner)
+            lines = [f"📸 盲测截图校验｜{table_name}｜{now:%m-%d}",
+                     f"你名下有 {miss_total} 处漏填"
+                     + (f"、{wrong_total} 处疑似放错" if wrong_total else "") + "："]
+            for group in group_order:
+                detail = d["miss"].get(group)
+                if not detail:
+                    continue
+                parts = "、".join(f"{k} {v} 处" for k, v in sorted(detail.items(), key=lambda kv: -kv[1]))
+                lines.append(f"【{group}】{parts}")
+            if wrong_total:
+                lines.append("\n⚠️ 疑似放错：")
+                shown = 0
+                for group in group_order:
+                    for it in d["wrong"].get(group, []):
+                        if shown < 10:
+                            lines.append(f"· {group}-{it}")
+                            shown += 1
+                if wrong_total > shown:
+                    lines.append(f"· …另有 {wrong_total - shown} 处")
+            lines.append("\n规则：结果填了「通过」或「不通过」就要配截图；"
+                         "「待验收」「不涉及或无此需求」不用。")
+            lines.append(f"表格：{BASE_URL}")
+            if wrong_total:
+                lines.append("截图确认没问题的，拿后面那个 [编号] 去 Actions "
+                             "手动触发「盲测截图校验」、填进 ignore，以后不再报。")
+            return "\n".join(lines)
+
+        people = sorted((o for o in per_person if person_total(o)[0] or person_total(o)[1]),
+                        key=lambda o: -sum(person_total(o)))
+        if not people:
+            text = (f"📸 盲测截图校验｜{table_name}｜{now:%m-%d}｜{scope_desc}\n"
+                    f"✅ 全部通过：没有漏填，也没有发现放错的截图")
+            if DRY_RUN:
+                print("\n== DRY RUN ==（不发送）\n" + text)
+            else:
+                beehive_send(text, [])
+            return
+
+        # 先发私信。发失败的人要在群里点出来，不能让他们以为自己没事
+        dm_ok, dm_fail = [], []
+        for owner in people:
+            text = build_dm(owner)
+            open_id = owner_open_id.get(owner)
+            if not open_id:
+                dm_fail.append((owner, "表里拿不到 open_id"))
+                continue
+            if DRY_RUN:
+                print(f"\n== DRY RUN ==（不发送）私信给 {owner}（{open_id}）\n{text}")
+                dm_ok.append(owner)
+                continue
+            ok, err = send_feishu_dm(token, open_id, text)
+            (dm_ok if ok else dm_fail).append(owner if ok else (owner, err))
+            if not ok:
+                print(f"⚠️ 私信 {owner} 失败：{err}")
+
+        # 群里只发汇总：每人一行总数，不展开明细
+        miss_all = sum(person_total(o)[0] for o in people)
+        wrong_all = sum(person_total(o)[1] for o in people)
+        lines = [f"📸 盲测截图校验｜{table_name}｜{now:%m-%d}｜{scope_desc}",
+                 f"❌ 漏填 {miss_all} 处"
+                 + (f"、疑似放错 {wrong_all} 处" if wrong_all else "")
+                 + f"，涉及 {len(people)} 人。明细已飞书私信给各位，群里只放总数："]
+        at_names = []
+        for owner in people:
+            miss, bad = person_total(owner)
+            tail_txt = f"{miss} 处" + (f" + 放错 {bad} 处" if bad else "")
+            lines.append(f"- {mention(owner)}：{tail_txt}")
+            if beehive_id(owner):
+                at_names.append(owner)
+        by_group = []
+        for group in group_order:
+            g = sum(sum(v.values()) for v in (missing.get(group) or {}).values())
+            if g:
+                by_group.append(f"{group} {g}")
+        if by_group:
+            lines.append("\n按分组：" + "、".join(by_group))
+        if dm_fail:
+            lines.append("\n⚠️ 这些人私信没发出去，请手动通知："
+                         + "、".join(f"{o}（{e}）" for o, e in dm_fail))
+        text = "\n".join(lines)
+        if DRY_RUN:
+            print("\n== DRY RUN ==（不发送）群汇总\n" + text)
+            print(f"待 @ 的人：{at_names}")
+        else:
+            beehive_send(text, at_names)
+        print(f"私信成功 {len(dm_ok)} 人，失败 {len(dm_fail)} 人")
+        return
+
+    # ---------- 非 DM 模式：一个分组在群里发一条完整明细 ----------
     sent = 0
     for group in group_order:
         text, at_names = build_group_message(group)
