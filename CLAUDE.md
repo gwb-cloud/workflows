@@ -263,10 +263,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **研发的蜂巢名单在 `beehive_people.DEV_BEEHIVE_ID`**，和验收团队那份分开，
   因为两拨人不在同一个群。飞书姓名和蜂巢显示名不一致的写进 `DEV_NAME_ALIAS`。
-  **还有 14 个人对不上**（于子俊 53 条、甘浩宇 29、董鸿华 17、张婷华 11、王鹏程 8、
-  高洪娟 8、学实（郭鸣轩）6、迷人的幽幽 6、张可松 4、tomo 2、兰图 2、朱新宏 1、
-  欧荣辉 1、李明 1），提醒里只写名字、@ 不到人。
-  `王涛 → 云恒` 是按飞书表里的头像推断的，**还没跟本人确认**。
+
+  **补名单不要靠猜昵称，用飞书通讯录对**，蜂巢显示名就是飞书的别名（`i18n_name.zh_cn`）：
+
+  ```bash
+  # 飞书姓名 → 蜂巢显示名
+  lark-cli contact +get-user --user-id <open_id> -q '.data.user.i18n_name.zh_cn'
+  # 反过来：拿着蜂巢昵称找是谁（看返回里的 localized_name 和 department）
+  lark-cli contact +search-user --query <蜂巢昵称> --as user
+  ```
+
+  这么对出来 8 个：王涛→云恒、王鹏程→Liko、高洪娟→高耳机、于子俊→广志、
+  甘浩宇→公台、张婷华→Yatoro、李明→冰太、迷人的幽幽→harlake。
+  现在 39 个技术负责人里 **32 个能 @ 到（890 条记录）**，剩 7 人 33 条：
+  董鸿华 17、学实（郭鸣轩）6、张可松 4、tomo 2、兰图 2、朱新宏 1、欧荣辉 1。
+
+  > ⚠️ 欧荣辉的飞书别名是「云竹」，蜂巢名单里只有「云恒」（王涛），**是两个人，别混**。
 
 ### 删过的异常选项（2026-11-07）
 
