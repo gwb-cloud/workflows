@@ -23,6 +23,7 @@ PERSON_BEEHIVE_ID = {
     "唐炜": "ouv4qovznbncqw",
     "严光": "ouvgwgfyt1elue",
     "乐夏": "ouvwzhogat6shz",
+    "卫权": "ouvaxdcpgfh8br",        # 2026-11-12 入职，产品部-设计组
 }
 
 # 飞书姓名 → 上面的 key（飞书名和蜂巢显示名不一致的才要写）
