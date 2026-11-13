@@ -21,6 +21,14 @@ on:
         description: '校验范围：all=总验收列+所有轮次（默认）/ round=只看当前这一轮发版'
         required: false
         default: ''
+      vision:
+        description: '开视觉校验（判"不是界面截图"和"放错端"），填 true。需要 DASHSCOPE_API_KEY'
+        required: false
+        default: ''
+      max_vision:
+        description: '本次最多用视觉判多少张（默认400）。第一次建议先填 20 验证效果'
+        required: false
+        default: ''
       dm:
         description: '明细发私信：true=按人飞书私信+群里只放总数（默认）/ false=群里发完整明细'
         required: false
@@ -64,6 +72,11 @@ jobs:
           FORCE_SEND: ${{ github.event.inputs.force_send }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           MAX_DOWNLOAD: ${{ github.event.inputs.max_download }}
+          # 视觉校验默认关着。验证没问题后把下面的 vision 默认值改成 'true' 就常开，
+          # 判定按 file_token 永久缓存，每张图只花一次钱。
+          VISION: ${{ github.event.inputs.vision }}
+          MAX_VISION: ${{ github.event.inputs.max_vision }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           SCOPE: ${{ github.event.inputs.scope || 'all' }}
           # 2026-11 现状：第1/2次发版的欠账不补了，只催总验收的 Mac + iPhone。
           # 等以后要恢复催各轮发版，把这里的默认值改成空字符串即可。

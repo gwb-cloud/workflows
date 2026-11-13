@@ -365,6 +365,25 @@ open_id 用 `lark-cli contact +search-user --query <姓名> --as user` 查。
   但那已经是刻意行为，不是要防的手滑。
 - **加白已降级成兜底**，不是主方案。正常情况下不该再出现"去 GitHub 一个个加白"。
 
+### 视觉校验（百炼，2026-11-13 接入）
+
+几何特征判不出「贴了张完全不相关的图」，这部分靠 `qwen3-vl-8b-instruct`。
+**默认关着**，手动触发填 `vision=true` 才开；需要 `DASHSCOPE_API_KEY` 这个 Secret。
+
+- 模型只回一个 JSON：`{"is_ui":bool,"platform":"macOS|iOS|Web|其他","note":"..."}`。
+- **只报两种高把握的情况**：①`is_ui=false`（风景照、表情包、拍屏、空白图）
+  ②Mac 列里是 iOS 界面 / iPhone 列里是 macOS 界面。
+  `platform=Web/其他` 一律不报 —— 后台类用例本来就在浏览器里验，Web 出现在哪列都正常。
+- **判定按 file_token 永久缓存在 `screenshot_state.json` 的 `vision` 里**，
+  图片不会变，所以每张图只花一次钱。344 张全量一次约 ¥0.1~0.3。
+- 送进模型前缩到长边 512 转 JPEG（`VISION_MAX_SIDE`），token 压到最低。
+- **接口失败/返回解析不了，一律当「没判过」**：不报、不进缓存，下次重判。
+  绝不能把接口故障变成冤枉人的告警。
+- 限流是 **10 次/秒**（不是每分钟），调用间 sleep 0.15s；`MAX_VISION` 控制单次上限。
+- 一张图只下载一次，尺寸和视觉共用（`download_image` 同时返回宽高和字节）。
+
+验证没问题后，把 yml 里 `VISION` 的默认值改成 `'true'` 就常开。
+
 ### 截图加白怎么用
 
 报告里每条疑似后面都带一个图片编号 `[P1vbbUkw]`（`file_token` 前 8 位）。

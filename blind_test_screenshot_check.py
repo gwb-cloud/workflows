@@ -20,8 +20,10 @@
 import requests
 import os
 import io
+import re
 import json
 import time
+import base64
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -98,6 +100,19 @@ RESULT_NEED_SHOT = {"通过", "不通过"}
 DUP_THRESHOLD = env_int("DUP_THRESHOLD", 3)
 # 单次最多下载多少张图做尺寸检查，防止跑太久/太费调用
 MAX_DOWNLOAD = env_int("MAX_DOWNLOAD", 300)
+
+# 视觉校验（百炼 qwen3-vl-8b-instruct）：判"这张图是不是产品界面截图"以及
+# "看着像 macOS 还是 iOS"。几何特征判不出来的"贴了张完全不相关的图"只能靠它。
+# 默认关着，要开必须同时配 DASHSCOPE_API_KEY。判定结果按 file_token 永久缓存，
+# 图片不会变，所以每张图只花一次钱。
+VISION = os.environ.get("VISION", "").strip().lower() == "true"
+DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+VISION_MODEL = os.environ.get("VISION_MODEL", "").strip() or "qwen3-vl-8b-instruct"
+VISION_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+# 单次最多判多少张，第一次跑建议先填个小数验证效果，别一口气把全量跑了
+MAX_VISION = env_int("MAX_VISION", 400)
+# 送进模型前缩到长边这么大。512 够看清是什么界面，又把 token 压到最低
+VISION_MAX_SIDE = env_int("VISION_MAX_SIDE", 512)
 
 STATE_FILE = "screenshot_state.json"
 
@@ -294,18 +309,88 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
-def download_size(token, file_token):
-    """下载附件读出宽高。只认识得出尺寸的图片，其它返回 None"""
+def download_image(token, file_token):
+    """下载附件，返回 (宽高, 原始字节)。一张图只下一次，尺寸和视觉校验共用。
+    读不出尺寸的（不是图片、损坏）返回 (None, None)"""
     url = f"https://open.feishu.cn/open-apis/drive/v1/medias/{file_token}/download"
     try:
         resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
         if resp.status_code != 200 or resp.content[:1] == b"{":
-            return None
+            return None, None
         with Image.open(io.BytesIO(resp.content)) as img:
-            return img.size
+            return img.size, resp.content
     except Exception as e:
         print(f"⚠️ 读取附件 {file_token} 失败：{e}")
-        return None
+        return None, None
+
+
+VISION_PROMPT = (
+    "你在检查一张软件验收截图是否放对了地方。只看图，不要推测。\n"
+    "严格按这个 JSON 回答，不要加任何别的文字：\n"
+    '{"is_ui": true/false, "platform": "macOS"|"iOS"|"Web"|"其他", "note": "十个字以内"}\n'
+    "is_ui：这是不是电脑或手机上的软件/网页界面截图。"
+    "是界面截图就 true；生活照、风景、人像、表情包、纯色块、拍屏照片、"
+    "手写纸张、空白图这些都 false。\n"
+    "platform：界面本身看着是 macOS 桌面应用、iOS 手机应用、还是浏览器网页。"
+    "看不准就填「其他」，不要猜。"
+)
+
+
+def _shrink(raw, max_side):
+    """缩到长边 max_side 再转 JPEG，省 token。失败就原样返回"""
+    try:
+        with Image.open(io.BytesIO(raw)) as img:
+            img = img.convert("RGB")
+            w, h = img.size
+            if max(w, h) > max_side:
+                scale = max_side / max(w, h)
+                img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=80)
+            return buf.getvalue()
+    except Exception:
+        return raw
+
+
+def vision_judge(raw):
+    """问百炼这张图是什么。返回 dict 或 None（失败时返回 None，调用方当"没判过"处理，
+    绝不能把失败当成"有问题"报出去）"""
+    data_url = "data:image/jpeg;base64," + base64.b64encode(
+        _shrink(raw, VISION_MAX_SIDE)).decode()
+    body = {
+        "model": VISION_MODEL,
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": data_url}},
+            {"type": "text", "text": VISION_PROMPT},
+        ]}],
+        "temperature": 0,
+        "max_tokens": 200,
+    }
+    headers = {"Authorization": f"Bearer {DASHSCOPE_API_KEY}",
+               "Content-Type": "application/json"}
+    delay = 2
+    for attempt in range(1, 4):
+        try:
+            resp = requests.post(VISION_URL, headers=headers, json=body, timeout=60)
+            if resp.status_code == 200:
+                txt = resp.json()["choices"][0]["message"]["content"].strip()
+                m = re.search(r"\{.*\}", txt, re.S)        # 模型偶尔会包一层 ```json
+                if not m:
+                    print(f"⚠️ 视觉返回解析不了：{txt[:80]}")
+                    return None
+                out = json.loads(m.group())
+                return {"is_ui": bool(out.get("is_ui", True)),
+                        "platform": str(out.get("platform", "其他")),
+                        "note": str(out.get("note", ""))[:20]}
+            if resp.status_code not in (429, 500, 502, 503, 504):
+                print(f"⚠️ 视觉接口 HTTP {resp.status_code}：{resp.text[:120]}")
+                return None
+        except Exception as e:
+            print(f"⚠️ 视觉接口异常：{e}")
+        if attempt < 3:
+            time.sleep(delay)
+            delay *= 2
+    return None
 
 
 # 手机整屏截图的尺寸特征。要防的是"把手机整屏图贴到 Mac 列"，
@@ -475,6 +560,7 @@ def main():
     state = load_state()
     sizes = state.get("sizes", {})
     ignored = state.get("ignored", {})
+    vision_cache = state.get("vision", {})     # file_token → 模型判定，图不会变所以永久有效
 
     # 本次跑之前先处理加白/取消加白的输入
     all_tokens = sorted({t for t, *_ in to_check})
@@ -498,7 +584,12 @@ def main():
         for t in ambi:
             print(f"⚠️ 加白失败：编号 {t} 对应多张图，请填完整 file_token")
 
+    if VISION and not DASHSCOPE_API_KEY:
+        print("⚠️ VISION=true 但没配 DASHSCOPE_API_KEY，这次跳过视觉校验")
+    use_vision = VISION and bool(DASHSCOPE_API_KEY)
+
     wrong = defaultdict(lambda: defaultdict(list))     # 组 → 人 → [问题描述]
+    vision_called = vision_hit = 0
     downloaded = 0
     from_cache = 0
     ignored_hits = 0
@@ -513,15 +604,26 @@ def main():
         if ft in seen:
             continue
         seen.add(ft)
-        if ft not in sizes:
-            if downloaded >= MAX_DOWNLOAD:
+        # 要不要下载：尺寸没缓存，或者开了视觉但这张还没判过
+        need_vision = use_vision and ft not in vision_cache and vision_called < MAX_VISION
+        raw = None
+        if ft not in sizes or need_vision:
+            if ft not in sizes and downloaded >= MAX_DOWNLOAD:
                 continue
-            fetched = download_size(token, ft)
+            fetched, raw = download_image(token, ft)
             downloaded += 1
             if fetched:
                 sizes[ft] = list(fetched)
         else:
             from_cache += 1
+
+        if need_vision and raw:
+            verdict = vision_judge(raw)
+            vision_called += 1
+            if verdict:
+                vision_cache[ft] = verdict
+            time.sleep(0.15)       # 限流 10 次/秒，留点余量
+
         size = sizes.get(ft)
         if not size:
             continue
@@ -531,6 +633,21 @@ def main():
             wrong[group][owner].append(f"Mac 截图是手机整屏截图（{w}×{h}）[{short_id(ft)}]")
         elif platform == "iPhone" and not phone and w > h * 1.2 and w >= 1200:
             wrong[group][owner].append(f"iPhone 截图是大横图（{w}×{h}，疑似电脑截图）[{short_id(ft)}]")
+
+        # 视觉判定。只报两种高把握的情况，拿不准（platform=Web/其他）一律不报 ——
+        # 后台类用例本来就在浏览器里验，Web 出现在哪一列都正常
+        v = vision_cache.get(ft)
+        if v:
+            if not v.get("is_ui"):
+                note = f"：{v['note']}" if v.get("note") else ""
+                wrong[group][owner].append(f"{platform} 这张图不像软件界面截图{note} [{short_id(ft)}]")
+                vision_hit += 1
+            elif platform == "Mac" and v.get("platform") == "iOS":
+                wrong[group][owner].append(f"Mac 列里放的看着是 iOS 界面 [{short_id(ft)}]")
+                vision_hit += 1
+            elif platform == "iPhone" and v.get("platform") == "macOS":
+                wrong[group][owner].append(f"iPhone 列里放的看着是 macOS 界面 [{short_id(ft)}]")
+                vision_hit += 1
 
     for ft, refs in shot_refs.items():
         if ft in ignored:
@@ -542,6 +659,7 @@ def main():
 
     state["sizes"] = sizes
     state["ignored"] = ignored
+    state["vision"] = vision_cache
     state["last_run"] = now.strftime("%Y-%m-%d %H:%M")
     save_state(state)
 
@@ -550,6 +668,10 @@ def main():
     # 干净的分组不发（只打日志），全部干净才发一条汇总。
     print(f"本次下载 {downloaded} 张 + 读缓存 {from_cache} 张"
           + (f"，跳过已加白 {ignored_hits} 处" if ignored_hits else ""))
+    if use_vision:
+        print(f"视觉校验：本次判了 {vision_called} 张（累计缓存 {len(vision_cache)} 张），"
+              f"报出 {vision_hit} 处"
+              + ("，已达单次上限，剩下的下次再判" if vision_called >= MAX_VISION else ""))
 
     def build_group_message(group):
         """返回 (text, at_names)，没问题就返回 (None, [])"""
