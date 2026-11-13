@@ -74,6 +74,7 @@ def table_url(table_id):
     return f"{BASE_URL}?table={table_id}"
 
 FIELD_OWNER = "验收人"
+FIELD_CASE_ID = "目标"      # 存的是用例库主键 ID，不是描述；描述在「目标描述」列
 
 
 def env_int(name, default):
@@ -415,6 +416,10 @@ PHONE_RESOLUTIONS = {
 # 有人会把截图等比缩小再传，尺寸就对不上了，所以比例也认
 PHONE_RATIOS = sorted({round(h / w, 4) for w, h in PHONE_RESOLUTIONS})
 RATIO_TOLERANCE = 0.01   # 1%
+# 比例匹配必须卡尺寸上限，否则会冤枉 Mac 的宽窗口截图。
+# 2026-11-13 踩过：4610×2126 的比例 2.168 正好落在 iPhone 比例的 1% 内被报了出来，
+# 但手机整屏截图长边最大 3200（1440×3200），没有手机会输出 4610。
+PHONE_MAX_LONG_SIDE = 3300
 
 
 def _is_phone_shot(w, h):
@@ -423,7 +428,7 @@ def _is_phone_shot(w, h):
         return True
     # 等比缩放：比例对上且仍是整屏量级（裁出来的小块比例几乎不可能正好落在设备比例上）
     long_side, short_side = max(w, h), min(w, h)
-    if short_side < 500:
+    if short_side < 500 or long_side > PHONE_MAX_LONG_SIDE:
         return False
     ratio = round(long_side / short_side, 4)
     return any(abs(ratio - r) <= r * RATIO_TOLERANCE for r in PHONE_RATIOS)
@@ -541,6 +546,9 @@ def main():
         owner, open_id = get_person(fields, FIELD_OWNER)
         if open_id:
             owner_open_id.setdefault(owner, open_id)
+        # 「目标」列 2026-11-09 起存的是用例库主键 ID，报警时带上它，
+        # 收到消息的人才知道去表里找哪一行（光给图片编号没法索引）
+        case_id = get_select_value(fields, FIELD_CASE_ID).strip()
         for result_name, shot_name, platform, group in pairs:
             if get_select_value(fields, result_name).strip() not in RESULT_NEED_SHOT:
                 continue
@@ -553,8 +561,9 @@ def main():
                 ft = a.get("file_token")
                 if not ft:
                     continue
-                shot_refs[ft].append((owner, group, platform))
-                to_check.append((ft, a.get("name", ""), a.get("type", ""), owner, group, platform))
+                shot_refs[ft].append((owner, group, platform, case_id))
+                to_check.append((ft, a.get("name", ""), a.get("type", ""),
+                                 owner, group, platform, case_id))
 
     # ---------- 图片本身的检查 ----------
     state = load_state()
@@ -594,12 +603,13 @@ def main():
     from_cache = 0
     ignored_hits = 0
     seen = set()
-    for ft, fname, mime, owner, group, platform in to_check:
+    for ft, fname, mime, owner, group, platform, case_id in to_check:
+        at = f"用例 {case_id}｜" if case_id else ""
         if ft in ignored:
             ignored_hits += 1
             continue
         if mime and not mime.startswith("image/"):
-            wrong[group][owner].append(f"{platform} 放的不是图片（{fname or mime}）")
+            wrong[group][owner].append(f"{platform}｜{at}放的不是图片（{fname or mime}）")
             continue
         if ft in seen:
             continue
@@ -630,9 +640,9 @@ def main():
         w, h = size
         phone = _is_phone_shot(w, h)
         if platform == "Mac" and phone:
-            wrong[group][owner].append(f"Mac 截图是手机整屏截图（{w}×{h}）[{short_id(ft)}]")
+            wrong[group][owner].append(f"Mac｜{at}手机整屏截图（{w}×{h}）[{short_id(ft)}]")
         elif platform == "iPhone" and not phone and w > h * 1.2 and w >= 1200:
-            wrong[group][owner].append(f"iPhone 截图是大横图（{w}×{h}，疑似电脑截图）[{short_id(ft)}]")
+            wrong[group][owner].append(f"iPhone｜{at}大横图（{w}×{h}，疑似电脑截图）[{short_id(ft)}]")
 
         # 视觉判定。只报两种高把握的情况，拿不准（platform=Web/其他）一律不报 ——
         # 后台类用例本来就在浏览器里验，Web 出现在哪一列都正常
@@ -640,22 +650,25 @@ def main():
         if v:
             if not v.get("is_ui"):
                 note = f"：{v['note']}" if v.get("note") else ""
-                wrong[group][owner].append(f"{platform} 这张图不像软件界面截图{note} [{short_id(ft)}]")
+                wrong[group][owner].append(f"{platform}｜{at}不像软件界面截图{note} [{short_id(ft)}]")
                 vision_hit += 1
             elif platform == "Mac" and v.get("platform") == "iOS":
-                wrong[group][owner].append(f"Mac 列里放的看着是 iOS 界面 [{short_id(ft)}]")
+                wrong[group][owner].append(f"Mac｜{at}放的看着是 iOS 界面 [{short_id(ft)}]")
                 vision_hit += 1
             elif platform == "iPhone" and v.get("platform") == "macOS":
-                wrong[group][owner].append(f"iPhone 列里放的看着是 macOS 界面 [{short_id(ft)}]")
+                wrong[group][owner].append(f"iPhone｜{at}放的看着是 macOS 界面 [{short_id(ft)}]")
                 vision_hit += 1
 
     for ft, refs in shot_refs.items():
         if ft in ignored:
             continue
-        rows = len({(o, g, p) for o, g, p in refs})
+        rows = len({(o, g, p) for o, g, p, _c in refs})
         if len(refs) >= DUP_THRESHOLD and rows >= DUP_THRESHOLD:
-            owner, group, _p = refs[0]
-            wrong[group][owner].append(f"同一张图被用在 {len(refs)} 处 [{short_id(ft)}]")
+            owner, group, _p, _c = refs[0]
+            ids = [c for *_x, c in refs if c]
+            shown = "、".join(dict.fromkeys(ids[:8])) + ("…" if len(ids) > 8 else "")
+            wrong[group][owner].append(
+                f"同一张图被用在 {len(refs)} 处（用例 {shown}）[{short_id(ft)}]")
 
     state["sizes"] = sizes
     state["ignored"] = ignored
