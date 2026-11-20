@@ -14,6 +14,7 @@ import requests
 import os
 import json
 from collections import defaultdict
+from beehive_people import mention, beehive_id, beehive_send
 from datetime import datetime, timezone, timedelta
 import calendar
 
@@ -40,6 +41,7 @@ FORCE_SEND = os.environ.get("FORCE_SEND", "").strip().lower() == "true"
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID_CLI"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET_CLI"]
 BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_MANGCE"]
+DRY_RUN = os.environ.get("DRY_RUN", "").strip().lower() == "true"
 
 BLIND_TEST_APP_TOKEN = "FnFab3FDKa0JU6sqa19cDVpHnM7"
 
@@ -181,11 +183,17 @@ def get_person_name(fields, field_name):
 
 
 def get_select_value(fields, field_name):
+    """单选取值。飞书不同接口/不同导出方式有时给 "通过"、有时给 ["通过"]、
+    有时给 [{"text": "通过"}]，三种都要兼容 —— 这份原来不认 list，
+    真遇到 list 形态会把每个人算成 0%，而且不报错（2026-11-20 发现）"""
     value = fields.get(field_name)
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
         return value.get("text", "")
+    if isinstance(value, list) and value:
+        first = value[0]
+        return first.get("text", "") if isinstance(first, dict) else str(first)
     return ""
 
 
@@ -298,20 +306,33 @@ def main():
 
     lines.append(f"🐞 已验证中发现问题：{issue_count} 条")
 
-    # ===== 未达标人员：完成度低于预期时间进度的人 =====
-    behind_owners = []
+    # ===== 未达标人员 =====
+    # 零进度单独拎出来并 @ 人。混在"落后 X%"里看不出区别：慢一点和一条没动
+    # 是两回事，后者到月底基本不可能补完，得当面点。
+    behind_owners, zero_owners = [], []
     for owner, assigned in owner_total.items():
         done = owner_done.get(owner, 0)
         actual_pct = done / assigned * 100 if assigned else 0
-        if actual_pct < expected_pct:
+        if done == 0 and assigned:
+            zero_owners.append((owner, assigned))
+        elif actual_pct < expected_pct:
             behind_owners.append((owner, done, assigned, actual_pct))
+
+    at_names = []
+    if zero_owners:
+        zero_owners.sort(key=lambda x: -x[1])
+        who = "".join(mention(o) for o, _ in zero_owners)
+        at_names += [o for o, _ in zero_owners if beehive_id(o)]
+        detail = "、".join(f"{o} {n} 条" for o, n in zero_owners)
+        lines.append(f"❗ 整月零进度（一条都没验）：{who}")
+        lines.append(f"   本月已过 {elapsed_days}/{last_day} 天，{detail} 全部待验")
 
     if behind_owners:
         behind_owners.sort(key=lambda x: x[3])  # 完成度最低的排前面
         lines.append(f"🚨 完成度低于预期进度（{expected_pct:.1f}%）的人员：")
         for owner, _, _, actual_pct in behind_owners:
             lines.append(f"- {owner}：进度 {actual_pct:.0f}%")
-    else:
+    elif not zero_owners:
         lines.append("✅ 所有人完成度均达到预期进度")
 
     # ===== 检查二：各次发版的抽检完成度 =====
@@ -364,7 +385,16 @@ def main():
         print(f"已把 {written} 条抽检结果回填到基础验收结果列")
 
     text = "\n".join(lines)
-    send_to_beehive(text)
+    # 有要 @ 的人就走 beehive_people 那套（它负责把正文的 @ 和 atUsersInfo 对齐）；
+    # 没有就还用原来的纯文本发送
+    if DRY_RUN:
+        print("== DRY RUN ==（不发送）\n" + text)
+        print(f"待 @ 的人：{at_names}")
+        return
+    if at_names:
+        beehive_send(text, at_names, webhook=BEEHIVE_WEBHOOK)
+    else:
+        send_to_beehive(text)
     print(text)
 
 

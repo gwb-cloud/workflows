@@ -100,6 +100,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 盲测进度的统计口径
 
+- **零进度单独拎出来并 @ 人**（2026-11-20 加）。混在"落后 X pt"里看不出区别：
+  慢一点和一条没动是两回事，后者到月底基本补不完，得当面点。
+  这是 `blind_test_progress_check.py` 里唯一会 @ 人的地方，走
+  `beehive_people.beehive_send(..., webhook=BEEHIVE_WEBHOOK)`；没人要 @ 时
+  还是用原来的纯文本 `send_to_beehive`。加了 `dry_run` 输入可以只打印不发。
+- ⚠️ **这个脚本的 `get_select_value` 原来不认 list 形态**（只认 str 和 dict）。
+  生产环境飞书返回纯字符串所以一直没事，但 lark-cli 导出的 ndjson 给的是
+  `["通过"]`，喂进去会**静默把所有人算成 0%**，不报错。2026-11-20 已对齐成
+  和截图校验同一份实现（str / dict / list 三种都认）。
+  其它脚本里同名的复制版本也该顺手检查。
+
 - **某一端"已验收"= 结果字段非空且不是"待验收"**（`RESULT_PENDING_VALUES`）。两端的进度和结论经常不一致，实际值不止"通过/不通过"（还会出现"不涉及""阻塞"等），所以不能按固定选项判断。
 - **个人进度按两端分别算**：一条用例 = 2 个待办（Mac 一个、iPhone 一个），个人进度 =（已填 Mac 数 + 已填 iPhone 数）/（分到条数 × 2），避免一端没动就把整个人的进度拉到 0。
 - **用例级"完成"（`is_case_done`，用于各版本抽检完成度和发现问题数）仍要求两端都填**。
