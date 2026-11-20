@@ -1,8 +1,12 @@
 name: 发版抽检打标
 
 on:
-  schedule:
-    - cron: '0 3 * * 1-5'   # UTC 3点 = 北京时间上午11点，周一到周五
+  # 2026-11-20 停用定时触发：总验收本身还在 40% 水位（两人整月零进度），
+  # 再往表里塞「第N次发版-待验收」只会让分母更难看。11 月第1/2次发版的欠账也已
+  # 明确不补（见 blind_test_screenshot_check.yml 的 EXCLUDE_GROUPS 默认值）。
+  # 想恢复：解开下面这行即可，脚本本身是好的。
+  # schedule:
+  #   - cron: '0 3 * * 1-5'   # UTC 3点 = 北京时间上午11点，周一到周五
   workflow_dispatch:
     inputs:
       target_date:

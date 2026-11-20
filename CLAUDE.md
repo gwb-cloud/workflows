@@ -33,6 +33,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **先判断再读表**：周末直接退出；离发布超过 `ALERT_WINDOW_WORKDAYS`（5 个工作日）也直接退出，不要先把整张表拉下来再判断。`blind_test_tagging.py` 曾经每天无条件全表扫描 + 逐条写入。
 - **写操作一律走 batch**（`records/batch_update` / `batch_create` / `batch_delete`，每批 ≤450 条）。逐条 PUT 200 次既慢又会触发飞书写限流——这正是 2026-09~10 月打标任务连续两周失败的原因。
 - **所有飞书请求走 `api()` 封装**：HTTP 429/5xx 和飞书限流码（`RETRYABLE_CODES`）自动退避重试 4 次，其余错误码原样返回给调用方判断。新脚本直接复制这个函数，不要再裸写 `requests.get/post/put`。
+- **多维表格字段只有「列出字段」一个读接口**：`GET …/tables/{id}/fields`。**没有 `GET …/fields/{field_id}`**，拿单个字段的 options 只能从列表里筛。`PUT …/fields/{field_id}` 是存在的，但它**全量覆盖 property**，改 options 必须带上原有全部选项，否则历史选项会被清空。
+  - 2026-11-20 踩过：`blind_test_tagging.py` 对着不存在的 `GET /fields/{field_id}` 发请求，返回的不是 JSON，`resp.json()` 抛的 `JSONDecodeError` 是 `RequestException` 的子类，被 `api()` 当成网络抖动退避重试 4 次，最后报 `Extra data: line 1 column 5` ——**看起来像限流，其实是接口根本不存在**。以后见到 `Extra data: line N column M` 先怀疑 URL 写错了，不要去调重试参数。
+  - 这个 bug 潜伏了两个月没暴露，因为它只在「多选字段里缺这个选项」时才会被调到；老版本号早就在选项里，直到 MacSP18 这个新版本号才第一次真正走进去。**只在罕见分支里的代码等于没测过**。
 
 - 脚本顶部的 docstring 有些已经过时（例如 `weekly_redblack.py`/`check_and_notify.py` 提到的 `BEEHIVE_WEBHOOK_PRODUCT` 已不再使用），**以代码为准**。
 
@@ -60,7 +63,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `release_acceptance_summary.py` | 周一~周五10点、18点 | 按上文规则确定下一次发布及其需求，距发布 ≤5 个工作日才发；标题带版本号；按分工表「状态」字段判断通过/待验收，按人/按端统计；验收表中窗口期内提出、二级模块模糊匹配、状态=待修复的遗留问题按 P0-P4 计数 | 只读 | `BEEHIVE_WEBHOOK_P2_WORKFLOW` |
 | `weekly_redblack.py` | 每周一9点 | 本月红黑榜按人汇总 | 只读 | `BEEHIVE_WEBHOOK_P3_REDBLACK` |
 | `monthly_blind_test_setup.py` | 每月1日9点 | 找/建 `M{n}人员` 列（上月顺序循环左移一位）→ 找/建 `M{n}验收表`（二级模块选项从用例库快照）→ 全量用例轮流分配验收人 | CLI 高权限 | 不发消息 |
-| `blind_test_tagging.py` | 周一~周五11点 | 按上文规则确定下一次发布及其需求，二级模块关键词匹配需求描述，在多选字段"本次抽检版本号"写入**版本号**（选项不存在会先自动添加）。每个版本的抽检总量 = 已打标 + 关键词命中，不足 200 条才从未完成用例里随机补齐到 200，重复运行不会继续增长 | CLI 高权限 | 不发消息 |
+| `blind_test_tagging.py` | **已停用**（原周一~周五11点，仅保留手动触发） | 按上文规则确定下一次发布及其需求，二级模块关键词匹配需求描述，在多选字段"本次抽检版本号"写入**版本号**（选项不存在会先自动添加）。每个版本的抽检总量 = 已打标 + 关键词命中，不足 200 条才从未完成用例里随机补齐到 200，重复运行不会继续增长 | CLI 高权限 | 不发消息 |
 | `blind_test_progress_check.py` | 周一~周五19点 | 时间进度基准线（本月第几天/总天数）vs 实际完成度：整体（Mac/iPhone 分端，带今日新增）；落后人员只列"姓名：进度 X%"；本月各次发版的抽检完成度（按第N次发版的独立结果列统计）+ 抽检结果回填基础列。周六周日不发（cron 限定 1-5，脚本里按北京时区再兜一层，手动触发传 force_send=true 可强制发） | CLI 高权限 | `BEEHIVE_WEBHOOK_P2_WORKFLOW`（上线流程验收群） |
 | `blind_test_table_cleanup.py` | 手动 | 原始目标表增删用例后，按「目标」文本双向对账：删掉验收表里源表已没有的记录（有数据也删，同名多条时优先留已填结果/已打标的），并把源表新增的用例补进来（验收人给当前条数最少的人，二级模块缺的选项自动补）。默认 DRY RUN，`confirm=yes` 才执行，另有 `max_delete`/`max_create` 安全阀 | CLI 高权限 | 不发消息 |
 | `blind_test_mainflow_sync.py` | 手动 | 按「目标」把源表「是否主流程」同步到当月验收表（目标表没这个字段就照源表类型新建），并把主流程用例的「本次抽检版本号」改成只有 `TAG_VALUES` 指定的值（非主流程行不动）。默认 DRY RUN，`confirm=yes` 才写表 | CLI 高权限 | 不发消息 |
@@ -74,6 +77,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `diagnose_at_users.py` | 手动 | 逐人发一条 @ 测试消息，排查哪个人的蜂巢 ID 有问题 | - | `BEEHIVE_WEBHOOK_YANSHOU` |
 
 ### 一个月多次发版的抽检口径
+
+> **2026-11-20 起：发版抽检打标已停用（只停定时，保留手动触发）。**
+> 原因不是脚本坏了，是产出没人消费——总验收本身才 Mac 43.7% / iPhone 35.4%，两人整月零进度，
+> 这时候再塞一批「第N次发版-待验收」只会让分母更难看。11 月第1/2次发版的欠账也已明确不补。
+> 代价要认：失去「这次发版这个包验过」的回归口径，线上问题只能追溯到「本月验过/没验过」。
+> 恢复条件是总验收追到水位线；解开 `.github/workflows/blind_test_tagging.yml` 里注释掉的 cron 即可。
+> 下面这套口径本身没废，`monthly_blind_test_setup.py` 仍会每月预建 3 轮的列，只是没人往里打标了。
 
 一个月通常发版 2 次（例：11/12、11/26），**每次都要抽检，同一条主流程用例会被反复抽中**。结果字段一行只有一份，所以不能靠「本次抽检版本号」多选标记来区分轮次——否则第一轮填的结果会被算进第二轮，第二轮改结果又会篡改第一轮的历史。
 

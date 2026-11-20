@@ -193,24 +193,41 @@ def get_select_value(fields, field_name):
     return ""
 
 
-def get_field_type(token, app_token, table_id, field_name):
+def list_fields(token, app_token, table_id):
+    """字段列表。飞书只有「列出字段」这一个读接口，没有 GET /fields/{field_id}——
+    2026-11-20 踩过：按 field_id 单独 GET 返回的不是 JSON，被当成网络异常重试 4 次后报
+    「Extra data: line 1 column 5」，看起来像限流，其实是接口根本不存在。"""
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
-    data = api("GET", url, token=token, params={"page_size": 100})
-    if data.get("code") != 0:
-        raise RuntimeError(f"拉取字段失败：{data}")
-    for f in data["data"]["items"]:
+    items, page_token = [], None
+    while True:
+        params = {"page_size": 100}
+        if page_token:
+            params["page_token"] = page_token
+        data = api("GET", url, token=token, params=params)
+        if data.get("code") != 0:
+            raise RuntimeError(f"拉取字段失败：{data}")
+        items += data["data"].get("items", [])
+        page_token = data["data"].get("page_token")
+        if not data["data"].get("has_more"):
+            return items
+
+
+def get_field_type(token, app_token, table_id, field_name):
+    for f in list_fields(token, app_token, table_id):
         if f["field_name"] == field_name:
             return f["type"], f.get("field_id")
     return None, None
 
 
 def ensure_multi_select_option(token, app_token, table_id, field_id, option_name):
-    """多选字段写入前，确认这个选项存在，不存在就先加上"""
+    """多选字段写入前，确认这个选项存在，不存在就先加上。
+    选项只能从字段列表里读（见 list_fields 的注释），再整体 PUT 回去——
+    PUT 是全量覆盖，漏掉已有选项会把历史版本号清空，所以下面必须带上原有 options。"""
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields/{field_id}"
-    data = api("GET", url, token=token)
-    if data.get("code") != 0:
-        raise RuntimeError(f"读取字段详情失败：{data}")
-    field = data["data"]["field"]
+    field = next((f for f in list_fields(token, app_token, table_id)
+                  if f.get("field_id") == field_id), None)
+    if field is None:
+        raise RuntimeError(f"字段列表里找不到 field_id={field_id}")
     options = field.get("property", {}).get("options", [])
     if any(o["name"] == option_name for o in options):
         return
