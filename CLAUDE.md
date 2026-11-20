@@ -234,6 +234,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **故意重复**：没配技术负责人的，飞书到期提醒根本发不出去；没排计划修复时间的
 连到期都算不出来 —— 这类谁都催不到，两边都提一次。
 
+## 有人离职，把他的用例分回去
+
+脚本 `blind_test_reclaim.py`，默认 DRY RUN。2026-11-20 卫权离职时用过一次。
+
+```bash
+python3 blind_test_reclaim.py --leaver 卫权 --data <全量ndjson>          # 先看
+SCRATCH=<scratchpad> python3 blind_test_reclaim.py --leaver 卫权 --data <...> --confirm yes
+```
+
+- **只回收「两端都没动」的行**。他已经验过的留着他的署名 —— 那是"当时是谁验的"的
+  历史记录，跟技术负责人离职只清未完成记录的口径一致。
+  卫权 95 条里有 4 条验完了，没动，他名下就剩这 4 条。
+- **按「总数」补齐到人均**，不是按剩余量比例还回去。月度建表本来就是按总数平均分
+  （每人 ~183），离职回收就把总数填回那个水位：谁当初被抽走得多谁补回来得多。
+  91 条分完后 11 个人总数 182~183，极差 1。
+- open_id 直接从记录里已有的验收人字段取，不用另外查通讯录。
+- 人要同时进 `beehive_people.DEPARTED`；`PERSON_BEEHIVE_ID` 里的 ID **不要删**，
+  他名下还有已验完的历史记录。
+
 ## 新人入职，分未验收的用例
 
 脚本 `blind_test_reassign.py`，默认 DRY RUN。2026-11-12 卫权入职时用过一次。
