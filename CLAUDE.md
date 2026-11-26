@@ -64,7 +64,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `weekly_redblack.py` | 每周一9点 | 本月红黑榜按人汇总 | 只读 | `BEEHIVE_WEBHOOK_P3_REDBLACK` |
 | `monthly_blind_test_setup.py` | 每月1日9点 | 找/建 `M{n}人员` 列（上月顺序循环左移一位）→ 找/建 `M{n}验收表`（二级模块选项从用例库快照）→ 全量用例轮流分配验收人 | CLI 高权限 | 不发消息 |
 | `blind_test_tagging.py` | **已停用**（原周一~周五11点，仅保留手动触发） | 按上文规则确定下一次发布及其需求，二级模块关键词匹配需求描述，在多选字段"本次抽检版本号"写入**版本号**（选项不存在会先自动添加）。每个版本的抽检总量 = 已打标 + 关键词命中，不足 200 条才从未完成用例里随机补齐到 200，重复运行不会继续增长 | CLI 高权限 | 不发消息 |
-| `blind_test_progress_check.py` | 周一~周五19点 | 时间进度基准线（本月第几天/总天数）vs 实际完成度：整体（Mac/iPhone 分端，带今日新增）；落后人员只列"姓名：进度 X%"；本月各次发版的抽检完成度（按第N次发版的独立结果列统计）+ 抽检结果回填基础列。周六周日不发（cron 限定 1-5，脚本里按北京时区再兜一层，手动触发传 force_send=true 可强制发） | CLI 高权限 | `BEEHIVE_WEBHOOK_P2_WORKFLOW`（上线流程验收群） |
+| `blind_test_progress_check.py` | 周一~周五19点 | 时间进度基准线（本月第几天/总天数）vs 实际完成度：整体（Mac/iPhone 分端，带今日新增）；落后人员只列"姓名：进度 X%"；零进度单独一档并 @ 人。**不再播报各次发版的抽检完成度**（2026-11-26 去掉，没人看），但仍会扫各轮结果列把结果回填基础列。周六周日不发（cron 限定 1-5，脚本里按北京时区再兜一层，手动触发传 force_send=true 可强制发） | CLI 高权限 | `BEEHIVE_WEBHOOK_P2_WORKFLOW`（上线流程验收群） |
 | `blind_test_table_cleanup.py` | 手动 | 原始目标表增删用例后，按「目标」文本双向对账：删掉验收表里源表已没有的记录（有数据也删，同名多条时优先留已填结果/已打标的），并把源表新增的用例补进来（验收人给当前条数最少的人，二级模块缺的选项自动补）。默认 DRY RUN，`confirm=yes` 才执行，另有 `max_delete`/`max_create` 安全阀 | CLI 高权限 | 不发消息 |
 | `blind_test_mainflow_sync.py` | 手动 | 按「目标」把源表「是否主流程」同步到当月验收表（目标表没这个字段就照源表类型新建），并把主流程用例的「本次抽检版本号」改成只有 `TAG_VALUES` 指定的值（非主流程行不动）。默认 DRY RUN，`confirm=yes` 才写表 | CLI 高权限 | 不发消息 |
 | `issue_field_audit.py` | 每周一10点 | 问题池规则巡检（`OR5ubORn3atfo3szLSTcbnVdnTf` / `tbl3vBsukTCg1yrn`）：按脚本顶部的规则清单判 ①必填缺失 ②条件必填（进 Sprint 要有计划修复时间和技术负责人等）③字段互相矛盾（模块↔应用端、版本号↔应用端、已修复↔负责人验证）④过了计划修复时间还停在待修复（@ 技术负责人）。改规则只动脚本顶部的 `REQUIRED_FIELDS` / `MODULE_TO_PLATFORM` 等常量 | CLI 高权限 | `BEEHIVE_WEBHOOK`（先用测试群） |
@@ -94,6 +94,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **抽中即置「待验收」**：打标时把本轮两列写成「待验收」，验收人一眼看到本轮范围；统计时「待验收」=没做。
 - **本轮范围**：该轮两列任一非空的行（不再用版本号标记判断范围，标记只作记录）。
 - **结果回填**：`blind_test_progress_check.py` 会把本轮已填的结果回填到基础的 `Mac验收结果`/`iPhone验收结果`（**仅当基础列为空**），避免同一条填两遍、同时让全量覆盖进度照常累加。`BACKFILL=false` 可关掉。
+  - ⚠️ 2026-11-26 去掉了「本月各次发版抽检完成度」那段群播报，**但扫描循环不能跟着删** —— 回填逻辑长在同一个循环里，删了等于顺手关掉回填，总验收完成度会凭空缩水。现在那段代码只写表、不产出文案。
+  - 一条主流程用例会同时落在多轮抽检里，循环会给它攒出多条更新。同一个 `record_id` 在一个 batch 里出现两次是未定义行为，已按"后面的轮次覆盖前面的"合并（跟原先靠飞书顺序执行的结果一致，但不再依赖那个隐含假设）。
 - 改列名模板要**三个脚本一起改**（`ROUND_MAC_FIELD` / `ROUND_IPHONE_FIELD`，打标/进度/迁移），并同步飞书表里已有的列。
 - **切换到这套口径时**（或某个月的表是老结构、已经有抽检在跑），手动跑 `blind_test_round_migrate.py` 补列+迁移。往后每月新表由打标脚本自动建列，不用再跑。
 

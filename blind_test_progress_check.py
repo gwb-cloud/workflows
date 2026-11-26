@@ -335,50 +335,43 @@ def main():
     elif not zero_owners:
         lines.append("✅ 所有人完成度均达到预期进度")
 
-    # ===== 检查二：各次发版的抽检完成度 =====
-    # 一个月多次发版，结果各自记在"第N次发版-Mac/iPhone结果"列里，互不覆盖
-    field_names = get_table_field_names(token, BLIND_TEST_APP_TOKEN, table_id)
-    rounds = get_month_releases(token, now.year, now.month)
+    # ===== 检查二：把各轮发版的抽检结果回填基础列 =====
+    # 2026-11-26 去掉了「本月各次发版抽检完成度」那段播报——没人看。
+    # 但这段扫描不能删：回填才是它真正干的活，把"第N次发版"列里验过的结果
+    # 写回基础的 Mac/iPhone 验收结果列，省得同一条用例填两遍，
+    # 也让上面的总验收完成度能把抽检的成果算进去。只播报没了，写表照旧。
     backfill_updates = []
+    if BACKFILL:
+        field_names = get_table_field_names(token, BLIND_TEST_APP_TOKEN, table_id)
+        rounds = get_month_releases(token, now.year, now.month)
+        for round_no, _version_text, _release_date in rounds:
+            mac_field = ROUND_MAC_FIELD.format(n=round_no)
+            iphone_field = ROUND_IPHONE_FIELD.format(n=round_no)
+            if mac_field not in field_names and iphone_field not in field_names:
+                continue   # 这一轮还没开始打标
 
-    round_lines = []
-    for round_no, version_text, release_date in rounds:
-        mac_field = ROUND_MAC_FIELD.format(n=round_no)
-        iphone_field = ROUND_IPHONE_FIELD.format(n=round_no)
-        if mac_field not in field_names and iphone_field not in field_names:
-            continue   # 这一轮还没开始打标
-
-        scope = done = issues = 0
-        for r in records:
-            fields = r["fields"]
-            mac = get_select_value(fields, mac_field).strip()
-            iphone = get_select_value(fields, iphone_field).strip()
-            if not mac and not iphone:
-                continue   # 不在本轮抽检范围
-            scope += 1
-            mac_done = mac not in RESULT_PENDING_VALUES
-            iphone_done = iphone not in RESULT_PENDING_VALUES
-            if mac_done and iphone_done:
-                done += 1
-                if mac == "不通过" or iphone == "不通过":
-                    issues += 1
-            # 本轮验过的结果回填到基础列（基础列为空时才写），省得同一条填两遍
-            if BACKFILL:
+            for r in records:
+                fields = r["fields"]
+                mac = get_select_value(fields, mac_field).strip()
+                iphone = get_select_value(fields, iphone_field).strip()
+                if not mac and not iphone:
+                    continue   # 不在本轮抽检范围
                 write = {}
-                if mac_done and not is_result_done(fields, FIELD_MAC_RESULT):
+                if mac not in RESULT_PENDING_VALUES and not is_result_done(fields, FIELD_MAC_RESULT):
                     write[FIELD_MAC_RESULT] = mac
-                if iphone_done and not is_result_done(fields, FIELD_IPHONE_RESULT):
+                if iphone not in RESULT_PENDING_VALUES and not is_result_done(fields, FIELD_IPHONE_RESULT):
                     write[FIELD_IPHONE_RESULT] = iphone
                 if write:
                     backfill_updates.append({"record_id": r["record_id"], "fields": write})
 
-        pct = done / scope * 100 if scope else 0
-        round_lines.append(f"- 第{round_no}次发版（{version_text}，{release_date:%m-%d}）："
-                           f"{done}/{scope}（{pct:.0f}%，发现问题 {issues} 条）")
-
-    if round_lines:
-        lines.append("📦 本月各次发版抽检完成度：")
-        lines.extend(round_lines)
+    # 一条用例可能同时落在多轮抽检里（主流程用例每轮都抽），上面会给它攒出多条更新。
+    # 同一个 record_id 在一个 batch 里出现两次是未定义行为，这里按"后面的轮次覆盖前面的"
+    # 合并掉——跟原先靠飞书顺序执行得到的结果一致，但不再依赖那个隐含假设。
+    if backfill_updates:
+        merged = {}
+        for u in backfill_updates:
+            merged.setdefault(u["record_id"], {}).update(u["fields"])
+        backfill_updates = [{"record_id": rid, "fields": f} for rid, f in merged.items()]
 
     if backfill_updates:
         written = batch_update(token, BLIND_TEST_APP_TOKEN, table_id, backfill_updates)
