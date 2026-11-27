@@ -59,8 +59,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 脚本 | 触发时间（北京） | 作用 | 飞书应用 | 发消息用的 Secret |
 |---|---|---|---|---|
-| `check_and_notify.py` | 每天10点 | 见项目1 | 只读 | `BEEHIVE_WEBHOOK_YANSHOU` + `BEEHIVE_WEBHOOK_P1_NODE` |
-| `release_acceptance_summary.py` | 周一~周五10点、18点 | 按上文规则确定下一次发布及其需求，距发布 ≤5 个工作日才发；标题带版本号；按分工表「状态」字段判断通过/待验收，按人/按端统计；验收表中窗口期内提出、二级模块模糊匹配、状态=待修复的遗留问题按 P0-P4 计数 | 只读 | `BEEHIVE_WEBHOOK_P2_WORKFLOW` |
+| `check_and_notify.py` | 每天10点 | 见项目1。消息末尾附**发布节点表**链接（催的每一项都在那张表里打勾） | 只读 | `BEEHIVE_WEBHOOK_YANSHOU` + `BEEHIVE_WEBHOOK_P1_NODE` |
+| `release_acceptance_summary.py` | 周一~周五10点、18点 | 按上文规则确定下一次发布及其需求，距发布 ≤5 个工作日才发；标题带版本号；按分工表「状态」字段判断通过/待验收，按人/按端统计；验收表中窗口期内提出、二级模块模糊匹配、状态=待修复的遗留问题按 P0-P4 计数。消息末尾附**产品项目表**（=分工表）链接，2026-11-27 之前错指到节点更新总表 | 只读 | `BEEHIVE_WEBHOOK_P2_WORKFLOW` |
 | `weekly_redblack.py` | 每周一9点 | 本月红黑榜按人汇总 | 只读 | `BEEHIVE_WEBHOOK_P3_REDBLACK` |
 | `monthly_blind_test_setup.py` | 每月1日9点 | 找/建 `M{n}人员` 列（上月顺序循环左移一位）→ 找/建 `M{n}验收表`（二级模块选项从用例库快照）→ 全量用例轮流分配验收人 | CLI 高权限 | 不发消息 |
 | `blind_test_tagging.py` | **已停用**（原周一~周五11点，仅保留手动触发） | 按上文规则确定下一次发布及其需求，二级模块关键词匹配需求描述，在多选字段"本次抽检版本号"写入**版本号**（选项不存在会先自动添加）。每个版本的抽检总量 = 已打标 + 关键词命中，不足 200 条才从未完成用例里随机补齐到 200，重复运行不会继续增长 | CLI 高权限 | 不发消息 |

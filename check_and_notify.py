@@ -35,6 +35,11 @@ WEBHOOK_MAP = {
 TABLE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
 TABLE_ID = "tblSDaRAkltfVtx6"
 
+# 巡检提醒末尾附的链接。这条消息催的每一项（P0确认、ForBud三端、盲测录入、帮助文档）
+# 都是在这张表里打勾，所以链接贴在这儿才有用（2026-11-27 从发布验收总览挪过来的）。
+NODE_TABLE_URL = (f"https://pcnpuds47gj5.feishu.cn/base/"
+                  f"{TABLE_APP_TOKEN}?table={TABLE_ID}&view=vew5pG4bqr")
+
 # 字段名，必须和表格里的字段名完全一致
 FIELD_VERSION = "版本号"
 FIELD_RELEASE_DATE = "版本发布日期"
@@ -254,7 +259,8 @@ def main():
 
         if problems:
             lines, at_names_in_order = build_problem_lines(problems)
-            text = f"⚠️ 版本 {version} 验收巡检提醒：\n" + "\n".join(lines)
+            text = (f"⚠️ 版本 {version} 验收巡检提醒：\n" + "\n".join(lines)
+                    + f"\n\n📅 发布节点表：{NODE_TABLE_URL}")
             send_to_beehive(text, target="发版", at_names=at_names_in_order)
             print(text)
 

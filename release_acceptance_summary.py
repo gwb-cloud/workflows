@@ -38,15 +38,17 @@ BEEHIVE_WEBHOOK = os.environ["BEEHIVE_WEBHOOK_FABAN"]
 # 节点更新总表：发布日期的唯一数据源
 NODE_APP_TOKEN = "IC7ObBQ2ya2H4FsqT3ocPreYned"
 NODE_TABLE_ID = "tblSDaRAkltfVtx6"
-# 消息末尾附的链接，方便大家直接点进去看/改发布节点
-NODE_TABLE_URL = ("https://pcnpuds47gj5.feishu.cn/base/"
-                  f"{NODE_APP_TOKEN}?table={NODE_TABLE_ID}&view=vew5pG4bqr")
 FIELD_NODE_VERSION = "版本号"
 FIELD_NODE_RELEASE_DATE = "版本发布日期"
 
 # 分工表（产品部项目管理）
 RELEASE_APP_TOKEN = "VhZebH05uaUlEyscWfWc2mMvnhc"
 RELEASE_TABLE_ID = "tbl1Gwx4r7oOcV8g"
+
+# 消息末尾附的链接。总览讲的是"这次发版有哪些需求、谁验到哪了"，数据全部来自分工表，
+# 所以指向分工表本身（2026-11-27 之前错指到节点更新总表，点进去看不到需求）。
+PROJECT_TABLE_URL = ("https://pcnpuds47gj5.feishu.cn/base/"
+                     f"{RELEASE_APP_TOKEN}?table={RELEASE_TABLE_ID}&view=vewNWzo9ji")
 
 FIELD_PROJECT_DESC = "项目说明"
 FIELD_PRODUCT_OWNER = "产品owner"
@@ -444,7 +446,7 @@ def main():
     else:
         lines.append("- 无")
 
-    lines.append(f"\n📅 发布节点表：{NODE_TABLE_URL}")
+    lines.append(f"\n📋 产品项目表：{PROJECT_TABLE_URL}")
 
     text = "\n".join(lines)
     send_to_beehive(text, at_names=at_names_in_order)
