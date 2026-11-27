@@ -34,11 +34,11 @@ on:
         required: false
         default: ''
       groups:
-        description: '白名单：只校验这几个分组，逗号分隔。临时查看用，留空=全部'
+        description: '白名单：只校验这几个分组，逗号分隔。留空=默认只看「总验收」；填空格以外的值可临时看别的分组，填 全部 不行、要列具体分组名'
         required: false
         default: ''
       exclude_groups:
-        description: '黑名单：不催这几个分组，逗号分隔。留空=用下面的默认值'
+        description: '黑名单：在白名单基础上再剔掉这几个分组，逗号分隔。默认空'
         required: false
         default: ''
       ignore:
