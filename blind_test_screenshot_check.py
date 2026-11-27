@@ -315,18 +315,29 @@ def save_state(state):
 
 
 def download_image(token, file_token):
-    """下载附件，返回 (宽高, 原始字节)。一张图只下一次，尺寸和视觉校验共用。
-    读不出尺寸的（不是图片、损坏）返回 (None, None)"""
+    """下载附件，返回 (宽高, 原始字节, 失败原因)。一张图只下一次，尺寸和视觉校验共用。
+    失败原因三选一：
+      None     成功
+      "fetch"  网络/接口没拿到 —— 瞬时问题，调用方不要报给验收人，下轮重试
+      "broken" 拿到字节但 Pillow 解不开 —— 文件本身不是有效图片，这是要报的真缺陷
+    这两种必须分开：混在一起要么漏报坏文件，要么网络一抖就冤枉人。"""
     url = f"https://open.feishu.cn/open-apis/drive/v1/medias/{file_token}/download"
     try:
         resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
         if resp.status_code != 200 or resp.content[:1] == b"{":
-            return None, None
+            # 网络/接口层面没拿到。瞬时问题，不能算到验收人头上
+            return None, None, "fetch"
         with Image.open(io.BytesIO(resp.content)) as img:
-            return img.size, resp.content
+            return img.size, resp.content, None
+    except requests.RequestException as e:
+        print(f"⚠️ 下载附件 {file_token} 失败（网络）：{e}")
+        return None, None, "fetch"
     except Exception as e:
-        print(f"⚠️ 读取附件 {file_token} 失败：{e}")
-        return None, None
+        # 字节拿到了但 Pillow 解不开 = 这个文件本身就不是有效图片
+        # （改了扩展名的视频、下载到一半的残图等）。这是要报出来的真缺陷，
+        # 2026-11-27 之前这里 return 完就被调用方 `if not size: continue` 静默吞掉了。
+        print(f"⚠️ 附件 {file_token} 不是有效图片：{e}")
+        return None, None, "broken"
 
 
 VISION_PROMPT = (
@@ -574,6 +585,7 @@ def main():
     sizes = state.get("sizes", {})
     ignored = state.get("ignored", {})
     vision_cache = state.get("vision", {})     # file_token → 模型判定，图不会变所以永久有效
+    broken = state.get("broken", {})           # file_token → 判定日期。解不开的文件记下来，别每轮重下
 
     # 本次跑之前先处理加白/取消加白的输入
     all_tokens = sorted({t for t, *_ in to_check})
@@ -606,6 +618,9 @@ def main():
     downloaded = 0
     from_cache = 0
     ignored_hits = 0
+    broken_hits = 0        # 附件打不开，报出去
+    fetch_failed = 0       # 网络没拿到，不报，只记日志
+    budget_skipped = 0     # MAX_DOWNLOAD 用完没轮到，不报
     seen = set()
     for ft, fname, mime, owner, group, platform, case_id in to_check:
         at = f"用例 {case_id}｜" if case_id else ""
@@ -621,13 +636,27 @@ def main():
         # 要不要下载：尺寸没缓存，或者开了视觉但这张还没判过
         need_vision = use_vision and ft not in vision_cache and vision_called < MAX_VISION
         raw = None
+        if ft in broken:
+            # 上次就判定过"打不开"，不用再下一遍白耗 MAX_DOWNLOAD 配额
+            wrong[group][owner].append(f"{platform}｜{at}附件打不开，可能不是有效图片 [{short_id(ft)}]")
+            broken_hits += 1
+            continue
         if ft not in sizes or need_vision:
             if ft not in sizes and downloaded >= MAX_DOWNLOAD:
+                budget_skipped += 1
                 continue
-            fetched, raw = download_image(token, ft)
+            fetched, raw, err = download_image(token, ft)
             downloaded += 1
             if fetched:
                 sizes[ft] = list(fetched)
+            elif err == "broken":
+                broken[ft] = now.strftime("%Y-%m-%d")
+                wrong[group][owner].append(f"{platform}｜{at}附件打不开，可能不是有效图片 [{short_id(ft)}]")
+                broken_hits += 1
+                continue
+            elif err == "fetch":
+                fetch_failed += 1       # 瞬时问题，不报给验收人，只在日志里计数
+                continue
         else:
             from_cache += 1
 
@@ -677,6 +706,7 @@ def main():
     state["sizes"] = sizes
     state["ignored"] = ignored
     state["vision"] = vision_cache
+    state["broken"] = broken
     state["last_run"] = now.strftime("%Y-%m-%d %H:%M")
     save_state(state)
 
@@ -684,7 +714,12 @@ def main():
     # 以前所有分组挤在一条里，一次几百条没人看得下去。现在按分组拆开，
     # 干净的分组不发（只打日志），全部干净才发一条汇总。
     print(f"本次下载 {downloaded} 张 + 读缓存 {from_cache} 张"
-          + (f"，跳过已加白 {ignored_hits} 处" if ignored_hits else ""))
+          + (f"，跳过已加白 {ignored_hits} 处" if ignored_hits else "")
+          + (f"，附件打不开 {broken_hits} 处（已报出）" if broken_hits else "")
+          + (f"，网络没取到 {fetch_failed} 张（不报，下轮重试）" if fetch_failed else ""))
+    if budget_skipped:
+        print(f"⚠️ MAX_DOWNLOAD={MAX_DOWNLOAD} 已用完，还有 {budget_skipped} 张没做尺寸检查。"
+              f"要扫全量就手动触发并把 max_download 调大")
     if use_vision:
         print(f"视觉校验：本次判了 {vision_called} 张（累计缓存 {len(vision_cache)} 张），"
               f"报出 {vision_hit} 处"
