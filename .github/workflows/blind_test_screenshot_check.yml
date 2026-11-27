@@ -78,13 +78,17 @@ jobs:
           MAX_VISION: ${{ github.event.inputs.max_vision }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           SCOPE: ${{ github.event.inputs.scope || 'all' }}
-          # 2026-11 现状：第1/2次发版的欠账不补了，只催总验收的 Mac + iPhone。
-          # 等以后要恢复催各轮发版，把这里的默认值改成空字符串即可。
-          GROUPS: ${{ github.event.inputs.groups }}
-          # 2026-11 的决定：第1/2次发版的欠账不补了，只催总验收 + 以后的新轮次。
-          # 用黑名单而不是白名单，这样第3次发版（预计 11-19）上线后会自动开始催，
-          # 不用回来改配置。要恢复催第1/2次，把这里的默认值改成空字符串。
-          EXCLUDE_GROUPS: ${{ github.event.inputs.exclude_groups || '第1次发版,第2次发版' }}
+          # 2026-11-27 起：只催总验收，各次发版一律不催。
+          #
+          # 这里**故意用白名单**，跟 11-13 那次的结论相反，因为策略方向反过来了：
+          # 当时要"以后的新轮次自动开始催"，白名单会把第3次发版静默挡掉，所以改黑名单；
+          # 现在发版抽检打标已停用（2026-11-20），不会再有新轮次产生，
+          # 要表达的是"永远只看总验收"——这正是白名单的语义，列第N次发版的黑名单
+          # 反而要每出一轮补一次，迟早漏。
+          # 要恢复催各轮发版：把默认值改回空字符串（SCOPE=all 就会覆盖全部轮次）。
+          GROUPS: ${{ github.event.inputs.groups || '总验收' }}
+          # 黑名单不再需要（白名单已经只剩总验收了），留着给临时排查用。
+          EXCLUDE_GROUPS: ${{ github.event.inputs.exclude_groups }}
           # 明细按人私信（走飞书，蜂巢还没有私信能力），群里只发总数
           DM: ${{ github.event.inputs.dm || 'true' }}
           IGNORE: ${{ github.event.inputs.ignore }}
